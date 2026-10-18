@@ -40,7 +40,7 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const train = new THREE.Group();
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(3, 2.5, 12),
-    new THREE.MeshLambertMaterial({ color: 0x1e88e5 }),
+    new THREE.MeshToonMaterial({ color: 0x1e88e5 }),
   );
   body.position.y = 1.25;
   train.add(body);
