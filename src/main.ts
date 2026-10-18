@@ -4,6 +4,8 @@ import { InputManager } from "./core/input";
 import { createRender } from "./render/scene";
 import { createHud } from "./ui/hud";
 import { route } from "./world/routeData";
+import { StationStopController } from "./core/stationStop";
+import { signalsForRoute, aspectFor, nearestSignal } from "./core/signals";
 import * as THREE from "three";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#app")!;
@@ -12,8 +14,9 @@ const input = new InputManager();
 const updateHud = createHud();
 
 const path = buildRail(route.nodes);
+const stationCtrl = new StationStopController(route);
+const signals = signalsForRoute(route);
 
-// track visual
 const trackPoints = route.nodes.map((n) => new THREE.Vector3(n.x, n.y, n.z));
 const trackGeo = new THREE.BufferGeometry().setFromPoints(trackPoints);
 const trackLine = new THREE.Line(trackGeo, new THREE.LineBasicMaterial({ color: 0x333333 }));
@@ -30,15 +33,23 @@ function loop(now: number) {
   accumulator += frameDt;
   input.update(frameDt);
 
+  if (input.consumeCameraToggle()) {
+    renderCtx.setCameraMode(renderCtx.cameraMode === "follow" ? "cab" : "follow");
+  }
+
   while (accumulator >= FIXED_DT) {
     const ctrl = input.controls();
     state = stepTrain(state, ctrl, route, path, FIXED_DT);
     accumulator -= FIXED_DT;
   }
 
+  const status = stationCtrl.update(state.distance, state.velocity, frameDt);
   const pos = positionAt(path, state.distance);
   const tan = tangentAt(path, state.distance);
   renderCtx.updateTrain(pos, tan);
+
+  const sig = nearestSignal(signals, state.distance);
+  const aspect = sig ? aspectFor(sig, state.distance) : "clear";
 
   const speedKmh = Math.abs(state.velocity) * 3.6;
   updateHud({
@@ -46,7 +57,7 @@ function loop(now: number) {
     speedLimitKmh: speedLimitAt(route, state.distance),
     power: input.powerNotch,
     brake: input.brake,
-    signal: "Clear",
+    signal: `${aspect}${status.doorsOpen ? " (doors)" : ""}`,
   });
 
   renderCtx.renderer.render(renderCtx.scene, renderCtx.camera);

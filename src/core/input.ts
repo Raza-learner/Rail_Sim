@@ -6,6 +6,7 @@ export class InputManager {
   brake = 0;
   reverser: -1 | 0 | 1 = 1;
   emergency = false;
+  cameraToggle = false;
 
   constructor() {
     window.addEventListener("keydown", (e) => {
@@ -13,6 +14,7 @@ export class InputManager {
       if (e.code === "KeyB") this.emergency = true;
       if (e.code === "KeyR") this.reverser = 1;
       if (e.code === "KeyF") this.reverser = -1;
+      if (e.code === "KeyC") this.cameraToggle = true;
     });
     window.addEventListener("keyup", (e) => {
       this.keys.delete(e.code);
@@ -38,5 +40,11 @@ export class InputManager {
       emergency: this.emergency,
       reverser: this.reverser,
     };
+  }
+
+  consumeCameraToggle(): boolean {
+    const v = this.cameraToggle;
+    this.cameraToggle = false;
+    return v;
   }
 }

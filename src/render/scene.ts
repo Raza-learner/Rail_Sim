@@ -1,11 +1,15 @@
 import * as THREE from "three";
 import type { Vec3 } from "../core/types";
 
+export type CameraMode = "follow" | "cab";
+
 export type RenderContext = {
   scene: THREE.Scene;
   camera: THREE.PerspectiveCamera;
   renderer: THREE.WebGLRenderer;
   train: THREE.Group;
+  cameraMode: CameraMode;
+  setCameraMode: (m: CameraMode) => void;
   updateTrain: (pos: Vec3, tangent: Vec3) => void;
 };
 
@@ -48,16 +52,28 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
     renderer.setSize(window.innerWidth, window.innerHeight);
   });
 
+  const renderState = { cameraMode: "follow" as CameraMode };
+
+  function setCameraMode(m: CameraMode) {
+    renderState.cameraMode = m;
+  }
+
   function updateTrain(pos: Vec3, tangent: Vec3) {
     train.position.set(pos.x, pos.y, pos.z);
     if (tangent.x !== 0 || tangent.z !== 0) {
       train.rotation.y = Math.atan2(tangent.x, tangent.z);
     }
-    // camera follow
-    const camOffset = new THREE.Vector3(-tangent.x * 12, 6, -tangent.z * 12);
-    camera.position.lerp(new THREE.Vector3(pos.x + camOffset.x, pos.y + camOffset.y, pos.z + camOffset.z), 0.1);
-    camera.lookAt(pos.x, pos.y + 1, pos.z);
+    if (renderState.cameraMode === "follow") {
+      const camOffset = new THREE.Vector3(-tangent.x * 12, 6, -tangent.z * 12);
+      camera.position.lerp(new THREE.Vector3(pos.x + camOffset.x, pos.y + camOffset.y, pos.z + camOffset.z), 0.1);
+      camera.lookAt(pos.x, pos.y + 1, pos.z);
+    } else {
+      // cab: front of train
+      const fwd = new THREE.Vector3(tangent.x, 0, tangent.z).normalize();
+      camera.position.lerp(new THREE.Vector3(pos.x + fwd.x * 4, pos.y + 2.2, pos.z + fwd.z * 4), 0.3);
+      camera.lookAt(pos.x + fwd.x * 30, pos.y + 1, pos.z + fwd.z * 30);
+    }
   }
 
-  return { scene, camera, renderer, train, updateTrain };
+  return { scene, camera, renderer, train, get cameraMode() { return renderState.cameraMode; }, setCameraMode, updateTrain };
 }
