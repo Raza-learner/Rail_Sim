@@ -1,9 +1,5 @@
 Title: Check out this chat
 
-URL Source: https://chatgpt.com/s/t_6ad4642b1a988191a2e6c78bd9c0f4d7
-
-Published Time: 2026-10-18T06:16:11.103Z
-
 Markdown Content:
 ## Technical Development Roadmap: Anime Japan Railway
 
