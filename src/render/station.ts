@@ -2,17 +2,281 @@ import * as THREE from "three";
 import type { RailPath } from "../core/rail";
 import { positionAt, tangentAt } from "../core/rail";
 import type { StationStop } from "../core/types";
+import { GABLE } from "./scenery";
 
-const PLATFORM = 0xb8bcc2;
+const PLATFORM = 0xbfc3c9;
 const TACTILE = 0xe0b23a;
-const CONCRETE = 0xa9adb3;
+const ROOF = 0x40566e;
+const TRIM = 0xeef2f6;
+const POST = 0x6e7883;
+const METAL = 0x4a5560;
+
+const NAME_KANJI: Record<string, string> = {
+  hinode: "日の出",
+  kawakami: "川上",
+  yamabuki: "山吹",
+};
+const NAME_ROMAJI: Record<string, string> = {
+  hinode: "Hinode",
+  kawakami: "Kawakami",
+  yamabuki: "Yamabuki",
+};
 
 function rightOf(tangent: { x: number; z: number }): { x: number; z: number } {
   const len = Math.hypot(tangent.x, tangent.z) || 1;
   return { x: tangent.z / len, z: -tangent.x / len };
 }
 
-function platform(length: number, main: boolean): THREE.Group {
+// ---- lazily built canvas materials (tests run in node without DOM) ----------
+
+let stationFacadeMat: THREE.MeshToonMaterial | null = null;
+function stationFacade(): THREE.MeshToonMaterial {
+  if (!stationFacadeMat) {
+    // 3:1 to match the stretched plane: wall, amber windows, centre door
+    const c = document.createElement("canvas");
+    c.width = 384;
+    c.height = 128;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#f4efe3";
+    ctx.fillRect(0, 0, 384, 128);
+    // a dark plinth grounds the building
+    ctx.fillStyle = "#9aa2a8";
+    ctx.fillRect(0, 116, 384, 12);
+    for (const x of [36, 116, 224, 304]) {
+      ctx.fillStyle = "#3a4658";
+      ctx.fillRect(x - 3, 38, 62, 52);
+      ctx.fillStyle = "#f6e6a8";
+      ctx.fillRect(x, 41, 56, 46);
+      ctx.fillStyle = "#e8d78e";
+      ctx.fillRect(x, 62, 56, 3);
+    }
+    ctx.fillStyle = "#33404f";
+    ctx.fillRect(172, 52, 44, 76);
+    ctx.fillStyle = "#7f8892";
+    ctx.fillRect(171, 52, 2, 76);
+    ctx.fillRect(215, 52, 2, 76);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    stationFacadeMat = new THREE.MeshToonMaterial({ map: tex, alphaTest: 0.5 });
+  }
+  return stationFacadeMat;
+}
+
+const signCache = new Map<string, THREE.MeshBasicMaterial>();
+function signMaterial(id: string): THREE.MeshBasicMaterial {
+  let mat = signCache.get(id);
+  if (!mat) {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 96;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#f7f9fa";
+    ctx.fillRect(0, 0, 256, 96);
+    ctx.strokeStyle = "#1f5fae";
+    ctx.lineWidth = 7;
+    ctx.strokeRect(6, 6, 244, 84);
+    ctx.fillStyle = "#16324c";
+    ctx.textAlign = "center";
+    ctx.font = "700 44px 'Yu Gothic', 'Meiryo', 'Hiragino Sans', sans-serif";
+    ctx.fillText(NAME_KANJI[id] ?? id, 128, 52);
+    ctx.font = "600 20px 'Segoe UI', sans-serif";
+    ctx.fillStyle = "#50656f";
+    ctx.fillText((NAME_ROMAJI[id] ?? id).toUpperCase(), 128, 80);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshBasicMaterial({ map: tex });
+    signCache.set(id, mat);
+  }
+  return mat;
+}
+
+// ---- fittings ---------------------------------------------------------------
+
+function lamp(x: number, z: number): THREE.Group {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.05, 0.09, 3, 6),
+    new THREE.MeshToonMaterial({ color: 0x38404a }),
+  );
+  pole.position.y = 1.5;
+  g.add(pole);
+  const arm = new THREE.Mesh(
+    new THREE.BoxGeometry(0.5, 0.08, 0.08),
+    new THREE.MeshToonMaterial({ color: 0x38404a }),
+  );
+  arm.position.set(-0.25, 3, 0);
+  g.add(arm);
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.2, 8, 6),
+    new THREE.MeshToonMaterial({ color: 0xfff2c6, emissive: 0xfff3c0, emissiveIntensity: 0.7 }),
+  );
+  head.position.set(-0.5, 2.95, 0);
+  g.add(head);
+  g.position.set(x, 0.9, z);
+  return g;
+}
+
+function bench(x: number, z: number): THREE.Group {
+  const g = new THREE.Group();
+  const wood = new THREE.MeshToonMaterial({ color: 0x7a5b3a });
+  const steel = new THREE.MeshToonMaterial({ color: METAL });
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.07, 2.2), wood);
+  seat.position.y = 0.48;
+  g.add(seat);
+  const back = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 2.2), wood);
+  back.position.set(0.26, 0.75, 0);
+  g.add(back);
+  for (const dz of [-0.85, 0.85]) {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.45, 0.08), steel);
+    leg.position.set(0, 0.22, dz);
+    g.add(leg);
+  }
+  g.position.set(x, 0.9, z);
+  return g;
+}
+
+function vendingMachine(x: number, z: number): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(0.8, 1.8, 0.7),
+    new THREE.MeshToonMaterial({ color: 0xd64541 }),
+  );
+  body.position.y = 0.9;
+  g.add(body);
+  // dark glass front with a pale dispensing slot, facing the track
+  const front = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.6, 1.15),
+    new THREE.MeshToonMaterial({ color: 0x2e3540 }),
+  );
+  front.rotation.y = -Math.PI / 2;
+  front.position.set(-0.41, 1.08, 0);
+  g.add(front);
+  const slot = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.5, 0.16),
+    new THREE.MeshToonMaterial({ color: 0xdadfe4 }),
+  );
+  slot.rotation.y = -Math.PI / 2;
+  slot.position.set(-0.42, 0.42, 0);
+  g.add(slot);
+  g.position.set(x, 0.9, z);
+  return g;
+}
+
+function sign(id: string, x: number, z: number): THREE.Group {
+  const g = new THREE.Group();
+  const board = new THREE.Mesh(
+    new THREE.PlaneGeometry(3.6, 1.05),
+    signMaterial(id),
+  );
+  board.rotation.y = -Math.PI / 2; // face the track (-x is track side)
+  board.position.set(0, 1.7, 0);
+  g.add(board);
+  for (const dz of [-1.3, 1.3]) {
+    const post = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6),
+      new THREE.MeshToonMaterial({ color: POST }),
+    );
+    post.position.set(0, 1.1, dz);
+    g.add(post);
+  }
+  g.position.set(x, 0.9, z);
+  return g;
+}
+
+function fence(length: number): THREE.Group {
+  const g = new THREE.Group();
+  const railMat = new THREE.MeshToonMaterial({ color: 0x9fb2c0 });
+  const span = length * 0.86;
+  for (const y of [1.25, 1.65]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.05, span), railMat);
+    rail.userData.noOutline = true;
+    rail.position.set(1.9, y, 0);
+    g.add(rail);
+  }
+  const count = Math.floor(span / 6);
+  for (let i = 0; i <= count; i++) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.85, 0.07), railMat);
+    post.userData.noOutline = true;
+    post.position.set(1.9, 1.32, -span / 2 + (i / count) * span);
+    g.add(post);
+  }
+  return g;
+}
+
+function canopyRoof(length: number): THREE.Group {
+  const g = new THREE.Group();
+  const span = length * 0.8;
+  // fascia trim under a dark roof reads as a proper station canopy
+  const trim = new THREE.Mesh(
+    new THREE.BoxGeometry(3.5, 0.1, span + 0.2),
+    new THREE.MeshToonMaterial({ color: TRIM }),
+  );
+  trim.position.set(-0.2, 3.22, 0);
+  g.add(trim);
+  const roof = new THREE.Mesh(
+    new THREE.BoxGeometry(3.4, 0.14, span),
+    new THREE.MeshToonMaterial({ color: ROOF }),
+  );
+  roof.position.set(-0.2, 3.34, 0);
+  g.add(roof);
+  const count = Math.max(2, Math.floor(span / 11));
+  for (let i = 0; i <= count; i++) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.35, 0.18), new THREE.MeshToonMaterial({ color: POST }));
+    post.position.set(1.4, 2.05, -span / 2 + (i / count) * span);
+    g.add(post);
+  }
+  return g;
+}
+
+function stationBuilding(): THREE.Group {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(8, 4.2, 12),
+    new THREE.MeshToonMaterial({ color: 0xf4efe3 }),
+  );
+  body.position.set(7, 2.1, 0);
+  g.add(body);
+  // hips-free gable matches the house roof language; ridge along Z (depth)
+  const roof = new THREE.Mesh(
+    GABLE,
+    new THREE.MeshToonMaterial({ color: ROOF }),
+  );
+  roof.scale.set(8.7, 1.5, 12.7);
+  roof.position.set(7, 4.18, 0);
+  g.add(roof);
+  // clock: small pale disc beside the door, a familiar station detail
+  const clock = new THREE.Mesh(
+    new THREE.CircleGeometry(0.42, 20),
+    new THREE.MeshBasicMaterial({ color: 0xf7f9fa }),
+  );
+  clock.rotation.y = -Math.PI / 2;
+  clock.position.set(2.94, 3.5, -3.2);
+  g.add(clock);
+  const clockFace = new THREE.Mesh(
+    new THREE.CircleGeometry(0.3, 20),
+    new THREE.MeshBasicMaterial({ color: 0x2c3a4c }),
+  );
+  clockFace.rotation.y = -Math.PI / 2;
+  clockFace.position.set(2.93, 3.5, -3.2);
+  g.add(clockFace);
+  // flat facade plane (windows + door) on the track-facing wall
+  const facade = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), stationFacade());
+  facade.name = "facade";
+  facade.rotation.y = -Math.PI / 2;
+  facade.scale.set(10.6, 3.4, 1);
+  facade.position.set(2.96, 2.2, 0);
+  g.add(facade);
+  // entrance canopy over the door
+  const awning = new THREE.Mesh(
+    new THREE.BoxGeometry(1.5, 0.1, 3.4),
+    new THREE.MeshToonMaterial({ color: ROOF }),
+  );
+  awning.position.set(2.4, 2.75, 0);
+  g.add(awning);
+  return g;
+}
+
+function platform(length: number, main: boolean, id: string): THREE.Group {
   const g = new THREE.Group();
 
   const slab = new THREE.Mesh(
@@ -22,61 +286,44 @@ function platform(length: number, main: boolean): THREE.Group {
   slab.position.y = 0.45;
   g.add(slab);
 
+  // white safety line along the track edge
+  const edge = new THREE.Mesh(
+    new THREE.BoxGeometry(0.22, 0.02, length * 0.98),
+    new THREE.MeshToonMaterial({ color: TRIM }),
+  );
+  edge.userData.noOutline = true;
+  edge.position.set(-1.82, 0.91, 0);
+  g.add(edge);
+
   const tactile = new THREE.Mesh(
     new THREE.BoxGeometry(0.6, 0.05, length * 0.98),
     new THREE.MeshToonMaterial({ color: TACTILE }),
   );
+  tactile.userData.noOutline = true;
   tactile.position.set(-1.5, 0.92, 0);
   g.add(tactile);
 
-  // canopy: roof on posts
-  const roof = new THREE.Mesh(
-    new THREE.BoxGeometry(3.6, 0.15, length * 0.55),
-    new THREE.MeshToonMaterial({ color: CONCRETE }),
-  );
-  roof.position.set(0.4, 3.4, 0);
-  g.add(roof);
-  for (const pz of [-length * 0.25, 0, length * 0.25]) {
-    const post = new THREE.Mesh(
-      new THREE.BoxGeometry(0.2, 2.5, 0.2),
-      new THREE.MeshToonMaterial({ color: 0x6b7076 }),
-    );
-    post.position.set(1.6, 2.15, pz);
-    g.add(post);
-  }
+  g.add(canopyRoof(length));
+  g.add(fence(length));
 
   if (main) {
-    const building = new THREE.Mesh(
-      new THREE.BoxGeometry(7, 4, 14),
-      new THREE.MeshToonMaterial({ color: 0xeef1f4 }),
-    );
-    building.position.set(6.5, 2, 0);
-    g.add(building);
-    const bRoof = new THREE.Mesh(
-      new THREE.BoxGeometry(7.6, 0.4, 14.6),
-      new THREE.MeshToonMaterial({ color: STRIPE }),
-    );
-    bRoof.position.set(6.5, 4.2, 0);
-    g.add(bRoof);
-    const entrance = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 2.4, 3),
-      new THREE.MeshToonMaterial({ color: 0x16222e }),
-    );
-    entrance.position.set(3.05, 1.3, 0);
-    g.add(entrance);
+    g.add(stationBuilding());
+    g.add(vendingMachine(1.45, -8.5));
+    g.add(bench(1.0, 11));
   }
+
+  g.add(sign(id, 0.9, main ? -13 : 0));
+  for (const lz of main ? [-20, 0, 20] : [-10, 10]) g.add(lamp(0.9, lz));
 
   return g;
 }
-
-const STRIPE = 0x1e5aa8;
 
 export function buildStations(scene: THREE.Scene, path: RailPath, stations: StationStop[], mainId: string) {
   for (const st of stations) {
     const pos = positionAt(path, st.distance);
     const tan = tangentAt(path, st.distance);
     const right = rightOf(tan);
-    const g = platform(70, st.id === mainId);
+    const g = platform(st.id === mainId ? 70 : 55, st.id === mainId, st.id);
     g.position.set(pos.x + right.x * 3.6, pos.y, pos.z + right.z * 3.6);
     g.rotation.y = Math.atan2(tan.x, tan.z);
     scene.add(g);

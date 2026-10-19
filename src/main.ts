@@ -42,7 +42,7 @@ const tiles = new TileManager();
 const buckets = bucketScatter(planScatter(path), tiles.tileSize);
 const tileColliders = new Map<string, AABB[]>();
 tiles.onTileLoad = (tile, group) => {
-  const part = buckets.get(tile.key) ?? { trees: [], houses: [], paddies: [] };
+  const part = buckets.get(tile.key) ?? { trees: [], houses: [], paddies: [], flowers: [], grass: [] };
   group.add(buildTileScenery(part));
   applyToon(group);
   addOutlines(group);

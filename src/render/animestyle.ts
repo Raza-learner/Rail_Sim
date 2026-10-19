@@ -68,6 +68,7 @@ export function addOutlines(root: THREE.Object3D) {
     if (!mesh.isMesh) return;
     if ((mesh as unknown as { isInstancedMesh?: boolean }).isInstancedMesh) return;
     if (mesh.name === "terrain" || mesh.name === "sky" || mesh.name === "hill" || mesh.name === "facade" || mesh.userData.outline) return;
+    if (mesh.userData.noOutline) return;
     if ((mesh.material as THREE.Material)?.transparent) return;
     targets.push(mesh);
   });
@@ -81,9 +82,10 @@ export function addOutlines(root: THREE.Object3D) {
 export function addSky(scene: THREE.Scene) {
   const geo = new THREE.SphereGeometry(4000, 32, 20);
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  const top = new THREE.Color(0x1e6ed3);
-  const mid = new THREE.Color(0x5aa0e8);
-  const bottom = new THREE.Color(0xeff6fb);
+  // deep azure zenith melting to a pale warm horizon (must match scene.fog)
+  const top = new THREE.Color(0x1e83dc);
+  const mid = new THREE.Color(0x5fb0ec);
+  const bottom = new THREE.Color(0xe9f3f8);
   const col = new THREE.Color();
   const colors = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
@@ -105,19 +107,22 @@ export function addSun(scene: THREE.Scene) {
   const c = document.createElement("canvas");
   c.width = c.height = 128;
   const ctx = c.getContext("2d")!;
+  // small soft core with a long gentle falloff so the disc reads as haze,
+  // not a hard circle behind the clouds
   const g = ctx.createRadialGradient(64, 64, 2, 64, 64, 63);
-  g.addColorStop(0, "rgba(255,252,235,1)");
-  g.addColorStop(0.35, "rgba(255,246,210,0.8)");
-  g.addColorStop(1, "rgba(255,246,210,0)");
+  g.addColorStop(0, "rgba(255,252,235,0.9)");
+  g.addColorStop(0.28, "rgba(255,246,214,0.42)");
+  g.addColorStop(0.65, "rgba(255,246,214,0.12)");
+  g.addColorStop(1, "rgba(255,246,214,0)");
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, 128, 128);
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   const sun = new THREE.Sprite(
-    new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false }),
+    new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0.85 }),
   );
   sun.position.set(1400, 900, 2600);
-  sun.scale.set(900, 900, 1);
+  sun.scale.set(520, 520, 1);
   sun.name = "sun";
   scene.add(sun);
 }

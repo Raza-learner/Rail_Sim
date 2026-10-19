@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { RailPath } from "../core/rail";
 import { positionAt, tangentAt } from "../core/rail";
 import { heightAt, distanceToTrack } from "./terrain";
@@ -110,8 +111,15 @@ function buildPoles(scene: THREE.Scene, path: RailPath) {
 }
 
 function buildHills(scene: THREE.Scene, path: RailPath) {
-  const near = new THREE.MeshToonMaterial({ color: 0x5f8a5a });
-  const far = new THREE.MeshToonMaterial({ color: 0x7d97b4 });
+  // far band: blue-violet peaks with snow caps, hazed into the sky
+  const farMats = [0x7186bb, 0x8295c9, 0x657aae].map(
+    (c) => new THREE.MeshToonMaterial({ color: c }),
+  );
+  const snowMat = new THREE.MeshToonMaterial({ color: 0xf4f8fc });
+  // mid band: varied green ridges with silhouette weight
+  const nearMats = [0x6d9a6a, 0x7fa870, 0x629066, 0x79a862].map(
+    (c) => new THREE.MeshToonMaterial({ color: c }),
+  );
   // keep hills and their skirts clear of the corridor, else a cone base
   // lands beside the track and grows over the sky
   const clear = (x: number, z: number, base: number) => distanceToTrack(path, x, z) < base + 350;
@@ -120,26 +128,45 @@ function buildHills(scene: THREE.Scene, path: RailPath) {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
-  for (let i = 0; i < 26; i++) {
-    const a = (i / 26) * Math.PI * 2;
-    const rad = 4800 + rand() * 700;
-    const h = 500 + rand() * 500;
+
+  // snow-capped far peaks: sharp jagged silhouette (4-6 segments), a white
+  // cone stacked at the tip covers the apex like the reference ranges
+  for (let i = 0; i < 22; i++) {
+    const a = (i / 22) * Math.PI * 2 + rand() * 0.5;
+    const rad = 4800 + rand() * 900;
+    const h = 620 + rand() * 560;
+    const r = h * (1.5 + rand() * 0.7);
     const x = Math.cos(a) * rad;
     const z = Math.sin(a) * rad + 1800;
-    if (clear(x, z, h * 2.2)) continue;
-    const hill = new THREE.Mesh(new THREE.ConeGeometry(h * 2.2, h, 6), far);
-    hill.name = "hill";
-    hill.position.set(x, h / 2 - 60, z);
-    scene.add(hill);
+    if (clear(x, z, r)) continue;
+    const peak = new THREE.Group();
+    const mat = farMats[i % farMats.length];
+    const base = new THREE.Mesh(new THREE.ConeGeometry(r, h, 4 + Math.floor(rand() * 3)), mat);
+    base.position.y = h / 2 - 80;
+    base.name = "hill";
+    peak.add(base);
+    const sr = r * 0.42;
+    const sh = h * 0.32;
+    const snow = new THREE.Mesh(new THREE.ConeGeometry(sr, sh, 4 + Math.floor(rand() * 3)), snowMat);
+    snow.position.y = h - sh / 2 - 80;
+    snow.rotation.y = rand() * Math.PI;
+    snow.name = "hill";
+    peak.add(snow);
+    peak.position.set(x, 0, z);
+    scene.add(peak);
   }
-  for (let i = 0; i < 20; i++) {
-    const a = (i / 20) * Math.PI * 2 + 0.2;
-    const rad = 2100 + rand() * 400;
-    const h = 260 + rand() * 260;
+  for (let i = 0; i < 18; i++) {
+    const a = (i / 18) * Math.PI * 2 + 0.2 + rand() * 0.5;
+    const rad = 2200 + rand() * 700;
+    const h = 240 + rand() * 280;
+    const r = h * (2.1 + rand() * 0.8);
     const x = Math.cos(a) * rad;
     const z = Math.sin(a) * rad + 1800;
-    if (clear(x, z, h * 2.6)) continue;
-    const hill = new THREE.Mesh(new THREE.ConeGeometry(h * 2.6, h, 6), near);
+    if (clear(x, z, r)) continue;
+    const hill = new THREE.Mesh(
+      new THREE.ConeGeometry(r, h, 5 + Math.floor(rand() * 3)),
+      nearMats[i % nearMats.length],
+    );
     hill.name = "hill";
     hill.position.set(x, h / 2 - 40, z);
     scene.add(hill);
@@ -147,8 +174,8 @@ function buildHills(scene: THREE.Scene, path: RailPath) {
 }
 
 // Unit gable prism, ridge along local Z, footprint 1x1, height 1. Scaled per
-// house so every roof reuses one geometry.
-const GABLE = (() => {
+// house (and the station building) so every roof reuses one geometry.
+export const GABLE = (() => {
   const quad = (a: number[], b: number[], c: number[], d: number[]) => [
     ...a, ...b, ...c,
     ...a, ...c, ...d,
@@ -188,9 +215,11 @@ function facadeMaterial(): THREE.MeshBasicMaterial {
 
 export function makeHouse(w: number, d: number, h: number, i: number, shop?: 1 | -1): THREE.Group {
   const house = new THREE.Group();
+  // warmed wall palette: cream, sand, oat and two persimmon-toned houses so
+  // the village reads warm under toon shading instead of grey
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshToonMaterial({ color: [0xe8dfd0, 0xd9cbb8, 0xcfd6dd, 0xe3d3c4, 0xdcd2c0][i % 5] }),
+    new THREE.MeshToonMaterial({ color: [0xf1e3cd, 0xead0b8, 0xe0d5c5, 0xf0dcc8, 0xe4c9ae, 0xd98f6e][i % 6] }),
   );
   body.position.y = h / 2;
   house.add(body);
@@ -242,10 +271,11 @@ export function makeHouse(w: number, d: number, h: number, i: number, shop?: 1 |
 // The layout is planned once (deterministic) and bucketed by tile; tiles only
 // build/dispose the meshes for their own share.
 
-export type TreeItem = { x: number; y: number; z: number; s: number; yaw: number };
+export type TreeItem = { x: number; y: number; z: number; s: number; yaw: number; kind: "pine" | "broad" };
 export type HouseItem = { x: number; y: number; z: number; w: number; d: number; h: number; i: number; yaw: number; shop?: 1 | -1 };
 export type PaddyItem = { x: number; y: number; z: number; yaw: number };
-export type Scatter = { trees: TreeItem[]; houses: HouseItem[]; paddies: PaddyItem[] };
+export type FloraItem = { x: number; y: number; z: number; s: number; yaw: number; c: number };
+export type Scatter = { trees: TreeItem[]; houses: HouseItem[]; paddies: PaddyItem[]; flowers: FloraItem[]; grass: FloraItem[] };
 
 const TOWN_S = 3500;
 const TOWN_CLEAR_RADIUS = 140;
@@ -261,15 +291,19 @@ function lcg(seed: number) {
 export function planScatter(path: RailPath): Scatter {
   const trees: TreeItem[] = [];
   const rand = lcg(12345);
-  for (let i = 0; i < 1600 && trees.length < 600; i++) {
-    const x = (rand() - 0.5) * 1600;
+  for (let i = 0; i < 2800 && trees.length < 1000; i++) {
+    const x = (rand() - 0.5) * 1800;
     const z = (rand() - 0.5) * 4800 + 1800;
-    if (distanceToTrack(path, x, z) < 30) continue;
+    const d = distanceToTrack(path, x, z);
+    if (d < 30) continue;
     if (Math.hypot(x, z - TOWN_S) < TOWN_CLEAR_RADIUS) continue; // keep town clear
     const y = heightAt(path, x, z);
     if (y < -0.5) continue; // not in the river
-    const s = 1 + rand() * 1.4;
-    trees.push({ x, y, z, s, yaw: s * 3 });
+    // pines take the open fields and higher ground; broadleafs cluster near
+    // the line and the villages, like garden trees
+    const kind: TreeItem["kind"] = d > 150 || rand() < 0.35 ? "pine" : "broad";
+    const s = 0.8 + rand() * 1.4;
+    trees.push({ x, y, z, s, yaw: s * 3, kind });
   }
 
   const houses: HouseItem[] = [];
@@ -330,7 +364,63 @@ export function planScatter(path: RailPath): Scatter {
     paddies.push({ x, y: heightAt(path, x, z) + 0.06, z, yaw: Math.atan2(t.x, t.z) });
   }
 
-  return { trees, houses, paddies };
+  // flower clusters in the corridor band, clumped like poppy drifts, not
+  // uniform noise — concentrated where the follow camera actually sees them
+  const flowers: FloraItem[] = [];
+  const FLORA_COLORS = [0xe2534a, 0xf08a3c, 0xef8aa4, 0xf5f2ea, 0xf2c94c, 0x9a7ad6];
+  const flowerRand = lcg(909090);
+  for (let i = 0; i < 950 && flowers.length < 2000; i++) {
+    const cx = (flowerRand() - 0.5) * 420;
+    const cz = flowerRand() * 3600;
+    const d = distanceToTrack(path, cx, cz);
+    if (d < 18 || d > 120) continue;
+    if (heightAt(path, cx, cz) < -0.5) continue;
+    const count = 16 + Math.floor(flowerRand() * 20);
+    const colorBase = Math.floor(flowerRand() * FLORA_COLORS.length);
+    for (let k = 0; k < count; k++) {
+      const a = flowerRand() * Math.PI * 2;
+      const rr = flowerRand() * flowerRand() * 10; // biased to the cluster centre
+      const x = cx + Math.cos(a) * rr;
+      const z = cz + Math.sin(a) * rr;
+      if (heightAt(path, x, z) < -0.5) continue;
+      // anchored to the cluster colour half the time, mixed otherwise, so
+      // drifts have an identity without becoming monochrome
+      const mixed = flowerRand() > 0.5;
+      flowers.push({
+        x,
+        y: heightAt(path, x, z),
+        z,
+        s: 0.65 + flowerRand() * 0.75,
+        yaw: flowerRand() * Math.PI,
+        c: mixed
+          ? Math.floor(flowerRand() * FLORA_COLORS.length)
+          : (colorBase + (flowerRand() > 0.85 ? 1 : 0)),
+      });
+    }
+  }
+
+  // grass tufts right beside the line (10-30 m), so the corridor cut reads as
+  // rough meadow instead of flat texture
+  const grass: FloraItem[] = [];
+  const GRASS_COLORS = [0x7fae5a, 0x8fbc62, 0x74a352, 0x9bc46a];
+  for (let i = 0; i < 4200 && grass.length < 2400; i++) {
+    const x = (rand() - 0.5) * 500;
+    const z = rand() * 3600;
+    const d = distanceToTrack(path, x, z);
+    if (d < 9 || d > 26) continue;
+    const y = heightAt(path, x, z);
+    if (y < -0.5) continue;
+    grass.push({
+      x,
+      y,
+      z,
+      s: 1.1 + rand() * 0.9,
+      yaw: rand() * Math.PI,
+      c: Math.floor(rand() * GRASS_COLORS.length),
+    });
+  }
+
+  return { trees, houses, paddies, flowers, grass };
 }
 
 export function bucketScatter(scatter: Scatter, tileSize: number): Map<string, Scatter> {
@@ -338,16 +428,215 @@ export function bucketScatter(scatter: Scatter, tileSize: number): Map<string, S
   const box = (item: { x: number; z: number }): Scatter => {
     const key = `${Math.floor(item.x / tileSize)},${Math.floor(item.z / tileSize)}`;
     let b = buckets.get(key);
-    if (!b) { b = { trees: [], houses: [], paddies: [] }; buckets.set(key, b); }
+    if (!b) { b = { trees: [], houses: [], paddies: [], flowers: [], grass: [] }; buckets.set(key, b); }
     return b;
   };
   for (const t of scatter.trees) box(t).trees.push(t);
   for (const h of scatter.houses) box(h).houses.push(h);
   for (const p of scatter.paddies) box(p).paddies.push(p);
+  for (const f of scatter.flowers) box(f).flowers.push(f);
+  for (const gr of scatter.grass) box(gr).grass.push(gr);
   return buckets;
 }
 
+// ---- tree geometries --------------------------------------------------------
+// Canopies are baked taller than the trunk span so instance scale s puts the
+// crown over the bole for every size. Built once at module level: pure
+// geometry math, safe in node tests.
+
+function coneAt(r: number, h: number, y: number): THREE.BufferGeometry {
+  const g = new THREE.ConeGeometry(r, h, 7);
+  g.translate(0, y, 0);
+  return g;
+}
+
+function blobAt(r: number, y: number, off: [number, number, number] = [0, 0, 0], squash = 1): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(r, 0);
+  g.applyMatrix4(new THREE.Matrix4().makeScale(1, squash, 1));
+  g.translate(off[0], y + off[1], off[2]);
+  return g;
+}
+
+const PINE_CANOPY = mergeGeometries([
+  coneAt(1.75, 2.8, 3.3),
+  coneAt(1.32, 2.3, 4.6),
+  coneAt(0.8, 1.7, 5.6),
+]);
+
+const BROAD_CANOPY = mergeGeometries([
+  blobAt(1.75, 3.5, [0, 0, 0], 0.82),
+  blobAt(1.2, 4.3, [0.95, 0.3, 0.35]),
+  blobAt(1.05, 4.2, [-0.85, 0.1, -0.4]),
+]);
+
+const TRUNK_GEO = new THREE.CylinderGeometry(0.16, 0.3, 2.5, 6);
+const TRUNK_MAT = new THREE.MeshToonMaterial({ color: 0x6b4a2b });
+const CANOPY_MAT = new THREE.MeshToonMaterial({ color: 0xffffff });
+
+const PINE_COLORS = [0x2f6f43, 0x3a7d50, 0x2a5e3a, 0x47855a];
+const BROAD_COLORS = [0x58a24a, 0x6cb454, 0x4f9143, 0x76ae41, 0x8ab84f];
+
+// ---- flora -------------------------------------------------------------------
+// Textures need the DOM, so they are lazily built singletons; geometries are
+// pure three.js math and safe at module level.
+
+function crossedPlanes(): THREE.BufferGeometry {
+  const a = new THREE.PlaneGeometry(1, 1);
+  const b = new THREE.PlaneGeometry(1, 1);
+  b.rotateY(Math.PI / 2);
+  return mergeGeometries([a, b]);
+}
+
+const FLORA_GEO = crossedPlanes();
+
+const FLORA_COLORS = [0xe2534a, 0xf08a3c, 0xef8aa4, 0xf5f2ea, 0xf2c94c, 0x9a7ad6];
+const GRASS_COLORS = [0x7fae5a, 0x8fbc62, 0x74a352, 0x9bc46a];
+
+// wind sway: a shared time uniform injected into the flora vertex shader.
+// Phase comes from the instance's world offset, so each tuft moves
+// independently without needing gl_InstanceID.
+const swayUniforms = { uTime: { value: 0 } };
+export function updateSway(time: number) {
+  swayUniforms.uTime.value = time;
+}
+function addSway(mat: THREE.MeshBasicMaterial) {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uTime = swayUniforms.uTime;
+    shader.vertexShader = shader.vertexShader
+      .replace(
+        "#include <common>",
+        "#include <common>\nuniform float uTime;",
+      )
+      .replace(
+        "#include <begin_vertex>",
+        `
+        #include <begin_vertex>
+        #ifdef USE_INSTANCING
+        {
+          float weight = max(position.y + 0.5, 0.0);
+          float phase = instanceMatrix[3][0] * 0.35 + instanceMatrix[3][2] * 0.21;
+          transformed.x += sin(uTime * 1.8 + phase) * 0.09 * weight;
+          transformed.z += cos(uTime * 1.4 + phase * 1.3) * 0.07 * weight;
+        }
+        #endif
+        `,
+      );
+  };
+}
+
+let flowerMat: THREE.MeshBasicMaterial | null = null;
+function flowerMaterial(): THREE.MeshBasicMaterial {
+  if (!flowerMat) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#ffffff";
+    for (let p = 0; p < 5; p++) {
+      const a = (p / 5) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.arc(32 + Math.cos(a) * 14, 32 + Math.sin(a) * 14, 11, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    ctx.fillStyle = "#f0d968";
+    ctx.beginPath();
+    ctx.arc(32, 32, 8, 0, Math.PI * 2);
+    ctx.fill();
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    flowerMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      alphaTest: 0.5,
+      side: THREE.DoubleSide,
+    });
+    addSway(flowerMat);
+  }
+  return flowerMat;
+}
+
+let grassMat: THREE.MeshBasicMaterial | null = null;
+function grassMaterial(): THREE.MeshBasicMaterial {
+  if (!grassMat) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 64;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#ffffff";
+    // three tapered blades from the base
+    for (const [bx, tipX, tipY] of [
+      [22, 10, 4],
+      [32, 32, 0],
+      [42, 54, 6],
+    ] as [number, number, number][]) {
+      ctx.beginPath();
+      ctx.moveTo(bx - 5, 63);
+      ctx.lineTo(tipX, tipY);
+      ctx.lineTo(bx + 5, 63);
+      ctx.closePath();
+      ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    grassMat = new THREE.MeshBasicMaterial({
+      map: tex,
+      alphaTest: 0.5,
+      side: THREE.DoubleSide,
+    });
+    addSway(grassMat);
+  }
+  return grassMat;
+}
+
+// paddy: water sheet with painted rice rows + banks, one shared material
+let paddyMat: THREE.MeshToonMaterial | null = null;
+function paddyRiceMaterial(): THREE.MeshToonMaterial {
+  if (!paddyMat) {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 96;
+    const ctx = c.getContext("2d")!;
+    // flooded water base, light enough to catch the sky
+    ctx.fillStyle = "#9dc6e4";
+    ctx.fillRect(0, 0, 128, 96);
+    ctx.fillStyle = "rgba(255,255,255,0.45)";
+    ctx.fillRect(8, 12, 112, 6);
+    ctx.fillRect(20, 30, 96, 3);
+    // rice seedling rows
+    ctx.fillStyle = "#5e8f3e";
+    for (let y = 14; y < 96; y += 16) {
+      ctx.fillRect(0, y, 128, 9);
+      ctx.fillStyle = "#75a94a";
+      ctx.fillRect(0, y + 5, 128, 3);
+      ctx.fillStyle = "#5e8f3e";
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    paddyMat = new THREE.MeshToonMaterial({ map: tex });
+  }
+  return paddyMat;
+}
+
 const UP = new THREE.Vector3(0, 1, 0);
+
+function addCanopy(
+  g: THREE.Group,
+  items: TreeItem[],
+  geo: THREE.BufferGeometry,
+  colors: number[],
+): void {
+  if (items.length === 0) return;
+  const canopy = new THREE.InstancedMesh(geo, CANOPY_MAT, items.length);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const col = new THREE.Color();
+  items.forEach((t, i) => {
+    q.setFromAxisAngle(UP, t.yaw);
+    m.compose(new THREE.Vector3(t.x, t.y, t.z), q, new THREE.Vector3(t.s, t.s, t.s));
+    canopy.setMatrixAt(i, m);
+    canopy.setColorAt(i, col.set(colors[i % colors.length]));
+  });
+  canopy.instanceMatrix.needsUpdate = true;
+  if (canopy.instanceColor) canopy.instanceColor.needsUpdate = true;
+  g.add(canopy);
+}
 
 export function buildTileScenery(scatter: Scatter): THREE.Group {
   const g = new THREE.Group();
@@ -359,47 +648,65 @@ export function buildTileScenery(scatter: Scatter): THREE.Group {
   }
   for (const p of scatter.paddies) {
     const pg = new THREE.Group();
-    const plane = new THREE.Mesh(
-      new THREE.PlaneGeometry(22, 16),
-      new THREE.MeshToonMaterial({ color: 0x7fae5a }),
-    );
+    const plane = new THREE.Mesh(new THREE.PlaneGeometry(22, 16), paddyRiceMaterial());
     plane.rotation.x = -Math.PI / 2;
-    plane.rotation.z = p.yaw;
     pg.add(plane);
-    const bank = new THREE.Mesh(
-      new THREE.BoxGeometry(0.5, 0.4, 16),
-      new THREE.MeshToonMaterial({ color: 0x5f7f45 }),
-    );
-    bank.position.set(-11 * Math.cos(p.yaw), 0, 11 * Math.sin(p.yaw));
-    pg.add(bank);
+    const bankMat = new THREE.MeshToonMaterial({ color: 0x5a7d40 });
+    for (const bx of [-11, 11]) {
+      const bank = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.45, 16), bankMat);
+      bank.position.set(bx, 0.12, 0);
+      pg.add(bank);
+    }
+    const endBank = new THREE.Mesh(new THREE.BoxGeometry(22.5, 0.4, 0.6), bankMat);
+    endBank.position.set(0, 0.1, -8);
+    pg.add(endBank);
     pg.position.set(p.x, p.y, p.z);
+    pg.rotation.y = p.yaw - Math.PI / 2;
     g.add(pg);
   }
   if (scatter.trees.length > 0) {
-    const trunk = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.18, 0.25, 2.4, 6),
-      new THREE.MeshToonMaterial({ color: 0x5b4327 }),
-      scatter.trees.length,
-    );
-    const foliage = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(1.8, 3.6, 7),
-      new THREE.MeshToonMaterial({ color: 0x3f7a3a }),
-      scatter.trees.length,
-    );
+    const trees = scatter.trees;
+    // one shared bole list for both kinds, then per-kind crowns
+    const trunk = new THREE.InstancedMesh(TRUNK_GEO, TRUNK_MAT, trees.length);
     const m = new THREE.Matrix4();
     const q = new THREE.Quaternion();
-    scatter.trees.forEach((t, i) => {
+    trees.forEach((t, i) => {
       q.setFromAxisAngle(UP, t.yaw);
-      m.compose(new THREE.Vector3(t.x, t.y + 1.2 * t.s, t.z), q, new THREE.Vector3(t.s, t.s, t.s));
+      m.compose(new THREE.Vector3(t.x, t.y + 1.15 * t.s, t.z), q, new THREE.Vector3(t.s, t.s, t.s));
       trunk.setMatrixAt(i, m);
-      m.compose(new THREE.Vector3(t.x, t.y + 4.2 * t.s, t.z), q, new THREE.Vector3(t.s, t.s, t.s));
-      foliage.setMatrixAt(i, m);
     });
     trunk.instanceMatrix.needsUpdate = true;
-    foliage.instanceMatrix.needsUpdate = true;
-    g.add(trunk, foliage);
+    g.add(trunk);
+    addCanopy(g, trees.filter((t) => t.kind === "pine"), PINE_CANOPY, PINE_COLORS);
+    addCanopy(g, trees.filter((t) => t.kind !== "pine"), BROAD_CANOPY, BROAD_COLORS);
   }
+  addFlora(g, scatter.flowers, flowerMaterial(), FLORA_COLORS);
+  addFlora(g, scatter.grass, grassMaterial(), GRASS_COLORS);
   return g;
+}
+
+// flowers and grass share a crossed-plane billboard approach: one instanced
+// mesh per tile per material, tinted per instance, base ON the ground plane
+function addFlora(
+  g: THREE.Group,
+  items: FloraItem[],
+  mat: THREE.MeshBasicMaterial,
+  colors: number[],
+): void {
+  if (items.length === 0) return;
+  const inst = new THREE.InstancedMesh(FLORA_GEO, mat, items.length);
+  const m = new THREE.Matrix4();
+  const q = new THREE.Quaternion();
+  const col = new THREE.Color();
+  items.forEach((f, i) => {
+    q.setFromAxisAngle(UP, f.yaw);
+    m.compose(new THREE.Vector3(f.x, f.y + 0.42 * f.s, f.z), q, new THREE.Vector3(f.s, f.s, f.s));
+    inst.setMatrixAt(i, m);
+    inst.setColorAt(i, col.set(colors[f.c % colors.length]));
+  });
+  inst.instanceMatrix.needsUpdate = true;
+  if (inst.instanceColor) inst.instanceColor.needsUpdate = true;
+  g.add(inst);
 }
 
 export function houseColliders(houses: HouseItem[]): AABB[] {

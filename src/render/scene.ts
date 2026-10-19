@@ -6,6 +6,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { Vec3 } from "../core/types";
 import { createTrainModel, TRAIN_LENGTH } from "./trainModel";
+import { updateSway } from "./scenery";
 
 export type CameraMode = "follow" | "cab";
 
@@ -22,8 +23,9 @@ export type RenderContext = {
 
 export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xeff6fb);
-  scene.fog = new THREE.Fog(0xeff6fb, 1400, 4400);
+  scene.background = new THREE.Color(0xe9f3f8);
+  // fog matches the sky horizon so distant terrain melts into the backdrop
+  scene.fog = new THREE.Fog(0xe9f3f8, 1200, 4200);
 
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 8000);
   camera.position.set(0, 8, -15);
@@ -32,16 +34,17 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-  // Saturated ambient: sky-blue from above, ground bounce from below, so
-  // shadow side of objects takes colour instead of greying out.
-  const hemi = new THREE.HemisphereLight(0xa8d3ff, 0x7f9e5a, 1.0);
+  // Saturated ambient: sky-blue from above, warm ground bounce from below, so
+  // the shadow side of objects takes colour instead of greying out.
+  const hemi = new THREE.HemisphereLight(0xa9d2ff, 0x8fae5e, 1.15);
   scene.add(hemi);
-  const dir = new THREE.DirectionalLight(0xfff0d8, 1.35);
-  dir.position.set(50, 100, 50);
+  const dir = new THREE.DirectionalLight(0xffe8c4, 1.6);
+  dir.position.set(60, 110, 30);
   scene.add(dir);
 
   const composer = new EffectComposer(renderer);
   composer.setSize(window.innerWidth, window.innerHeight);
+  const clock = new THREE.Clock();
   composer.addPass(new RenderPass(scene, camera));
   const bloom = new UnrealBloomPass(
     new THREE.Vector2(window.innerWidth, window.innerHeight),
@@ -110,8 +113,23 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   }
 
   function render() {
+    const t = clock.getElapsedTime();
+    updateSway(t); // wind in the grass and flowers
     const sky = scene.getObjectByName("sky");
     if (sky) sky.position.copy(camera.position);
+    const birds = scene.getObjectByName("birds");
+    if (birds) birds.rotation.y += 0.0006; // slow orbital drift overhead
+    const petals = scene.getObjectByName("petals");
+    if (petals) {
+      for (const p of petals.children) {
+        const d = p.userData as {
+          baseX: number; baseY: number; phase: number; range: number;
+          speed: number; freq: number; amp: number;
+        };
+        p.position.y = d.baseY - ((t * d.speed + d.phase) % d.range);
+        p.position.x = d.baseX + Math.sin(t * 0.7 + d.freq) * d.amp;
+      }
+    }
     composer.render();
   }
 
