@@ -1,13 +1,21 @@
 import * as THREE from "three";
 
-export type Tile = { key: string; x: number; z: number; size: number };
+export type Tile = {
+  key: string;
+  gx: number;
+  gz: number;
+  x: number;
+  z: number;
+  size: number;
+  group: THREE.Group;
+};
 
 export class TileManager {
   tileSize: number;
   loadRadius: number;
   unloadRadius: number;
   loaded = new Map<string, Tile>();
-  onTileLoad: (tile: Tile, mesh: THREE.Mesh) => void = () => {};
+  onTileLoad: (tile: Tile, group: THREE.Group) => void = () => {};
   onTileUnload: (tile: Tile) => void = () => {};
 
   constructor(tileSize = 250, loadRadius = 400, unloadRadius = 800) {
@@ -28,35 +36,43 @@ export class TileManager {
         const gx = gx0 + dx, gz = gz0 + dz;
         const cx = gx * this.tileSize + this.tileSize / 2;
         const cz = gz * this.tileSize + this.tileSize / 2;
-        const d = Math.hypot(cx - pos.x, cz - pos.z);
-        if (d <= this.loadRadius) wanted.add(this.keyFor(gx, gz));
+        if (Math.hypot(cx - pos.x, cz - pos.z) <= this.loadRadius) wanted.add(this.keyFor(gx, gz));
       }
     }
     // load
     for (const k of wanted) {
-      if (!this.loaded.has(k)) {
-        const [gx, gz] = k.split(",").map(Number);
-        const tile: Tile = { key: k, x: gx * this.tileSize, z: gz * this.tileSize, size: this.tileSize };
-        const mesh = new THREE.Mesh(
-          new THREE.PlaneGeometry(this.tileSize, this.tileSize),
-          new THREE.MeshLambertMaterial({ color: 0x7c9a5e, transparent: true, opacity: 0.35 }),
-        );
-        mesh.rotation.x = -Math.PI / 2;
-        mesh.position.set(tile.x + this.tileSize / 2, -0.01, tile.z + this.tileSize / 2);
-        scene.add(mesh);
-        (tile as any).mesh = mesh;
-        this.loaded.set(k, tile);
-      }
+      if (this.loaded.has(k)) continue;
+      const [gx, gz] = k.split(",").map(Number);
+      const tile: Tile = { key: k, gx, gz, x: gx * this.tileSize, z: gz * this.tileSize, size: this.tileSize, group: new THREE.Group() };
+      tile.group.name = `tile-${k}`;
+      this.onTileLoad(tile, tile.group);
+      scene.add(tile.group);
+      this.loaded.set(k, tile);
     }
-    // unload
+    // unload, with hysteresis: tiles stay inside unloadRadius so boundary
+    // crossing does not thrash load/unload every frame
     for (const [k, tile] of this.loaded) {
-      if (!wanted.has(k)) {
-        const mesh = (tile as any).mesh as THREE.Mesh;
-        scene.remove(mesh);
-        mesh.geometry.dispose();
-        (mesh.material as THREE.Material).dispose();
-        this.loaded.delete(k);
-      }
+      if (wanted.has(k)) continue;
+      const cx = tile.gx * this.tileSize + this.tileSize / 2;
+      const cz = tile.gz * this.tileSize + this.tileSize / 2;
+      if (Math.hypot(cx - pos.x, cz - pos.z) <= this.unloadRadius) continue;
+      scene.remove(tile.group);
+      disposeGroup(tile.group);
+      this.loaded.delete(k);
+      this.onTileUnload(tile);
     }
   }
+}
+
+// Outline meshes share geometry with (and inherit material from) their source
+// mesh, so skip them — the source mesh owns disposal.
+export function disposeGroup(group: THREE.Object3D) {
+  group.traverse((o) => {
+    const mesh = o as THREE.Mesh;
+    if (!mesh.isMesh || mesh.userData.outline) return;
+    mesh.geometry.dispose();
+    const mat = mesh.material as THREE.Material | THREE.Material[];
+    if (Array.isArray(mat)) mat.forEach((m) => m.dispose());
+    else mat.dispose();
+  });
 }

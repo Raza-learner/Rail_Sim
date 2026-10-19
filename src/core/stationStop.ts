@@ -75,8 +75,9 @@ export class StationStopController {
         break;
     }
 
-    // auto advance after departure
-    if (this.state === "ready" && distance > station.distance + 5 && Math.abs(velocity) > 0.5) {
+    // Advance on departure, or when the train blows through without stopping.
+    const dwellDone = this.state !== "stopped" && this.state !== "doorsOpen";
+    if (dwellDone && distance > station.distance + 5 && Math.abs(velocity) > 0.5) {
       this.currentIndex++;
       this.state = "idle";
       this.doorsOpen = false;

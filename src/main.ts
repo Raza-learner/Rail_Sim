@@ -8,6 +8,17 @@ import { StationStopController } from "./core/stationStop";
 import { signalsForRoute, aspectFor, nearestSignal } from "./core/signals";
 import { createPlayer, updatePlayer } from "./core/player";
 import type { AABB } from "./core/player";
+import { buildRails, buildStations } from "./render/station";
+import { buildTerrain, heightAt } from "./render/terrain";
+import {
+  buildStaticScenery,
+  planScatter,
+  bucketScatter,
+  buildTileScenery,
+  houseColliders,
+} from "./render/scenery";
+import { applyAnimeStyle, applyToon, addOutlines } from "./render/animestyle";
+import { updateTrainDoors } from "./render/trainModel";
 import { TileManager } from "./world/tiles";
 import * as THREE from "three";
 
@@ -19,21 +30,37 @@ const updateHud = createHud();
 const path = buildRail(route.nodes);
 const stationCtrl = new StationStopController(route);
 const signals = signalsForRoute(route);
-const tiles = new TileManager(250, 400, 800);
 
-const trackPoints = route.nodes.map((n) => new THREE.Vector3(n.x, n.y, n.z));
-const trackGeo = new THREE.BufferGeometry().setFromPoints(trackPoints);
-const trackLine = new THREE.Line(trackGeo, new THREE.LineBasicMaterial({ color: 0x333333 }));
-renderCtx.scene.add(trackLine);
+buildTerrain(renderCtx.scene, path);
+buildRails(renderCtx.scene, path);
+buildStations(renderCtx.scene, path, route.stations, "yamabuki");
+buildStaticScenery(renderCtx.scene, path);
 
-// colliders
-const colliders: AABB[] = [];
+// Scenery streams in tiles; the corridor itself (terrain, rails, platforms,
+// catenary) stays loaded so the simulation never depends on view distance.
+const tiles = new TileManager();
+const buckets = bucketScatter(planScatter(path), tiles.tileSize);
+const tileColliders = new Map<string, AABB[]>();
+tiles.onTileLoad = (tile, group) => {
+  const part = buckets.get(tile.key) ?? { trees: [], houses: [], paddies: [] };
+  group.add(buildTileScenery(part));
+  applyToon(group);
+  addOutlines(group);
+  const colliders = houseColliders(part.houses);
+  if (colliders.length > 0) tileColliders.set(tile.key, colliders);
+};
+tiles.onTileUnload = (tile) => tileColliders.delete(tile.key);
+
+// platform colliders belong to the stations, which never stream
+const platformColliders: AABB[] = [];
 for (const st of route.stations) {
-  colliders.push({ min: { x: -6, y: 0, z: st.distance - 4 }, max: { x: 6, y: 1.2, z: st.distance + 4 } });
+  platformColliders.push({ min: { x: -6, y: 0, z: st.distance - 4 }, max: { x: 6, y: 1.2, z: st.distance + 4 } });
 }
-// town blockout near Yamabuki
-colliders.push({ min: { x: 10, y: 0, z: 3480 }, max: { x: 20, y: 4, z: 3500 } });
-colliders.push({ min: { x: -20, y: 0, z: 3520 }, max: { x: -10, y: 4, z: 3540 } });
+function activeColliders(): AABB[] {
+  const all: AABB[] = [...platformColliders];
+  for (const list of tileColliders.values()) all.push(...list);
+  return all;
+}
 
 // player mesh
 const playerMesh = new THREE.Mesh(
@@ -43,7 +70,10 @@ const playerMesh = new THREE.Mesh(
 playerMesh.visible = false;
 renderCtx.scene.add(playerMesh);
 
+applyAnimeStyle(renderCtx.scene);
+
 let state = { distance: 0, velocity: 0 };
+let doorT = 0; // smoothed 0..1 door animation
 let mode: "drive" | "walk" = "drive";
 const player = createPlayer({ x: 0, y: 0, z: 0 });
 const FIXED_DT = 1 / 60;
@@ -67,7 +97,7 @@ function loop(now: number) {
       playerMesh.visible = true;
       mode = "walk";
     } else if (mode === "walk") {
-      // re-enter if near train
+      // re-enter if near the train
       const tpos = positionAt(path, state.distance);
       const d = Math.hypot(player.position.x - tpos.x, player.position.z - tpos.z);
       if (d < 4) {
@@ -83,11 +113,14 @@ function loop(now: number) {
       state = stepTrain(state, ctrl, route, path, FIXED_DT);
       accumulator -= FIXED_DT;
     }
-    const status = stationCtrl.update(state.distance, state.velocity, frameDt);
     const pos = positionAt(path, state.distance);
     const tan = tangentAt(path, state.distance);
     renderCtx.updateTrain(pos, tan);
     tiles.update(pos, renderCtx.scene);
+
+    const status = stationCtrl.update(state.distance, state.velocity, frameDt);
+    doorT += ((status.doorsOpen ? 1 : 0) - doorT) * Math.min(1, frameDt * 3);
+    updateTrainDoors(renderCtx.train, doorT);
 
     const sig = nearestSignal(signals, state.distance);
     const aspect = sig ? aspectFor(sig, state.distance) : "clear";
@@ -100,13 +133,13 @@ function loop(now: number) {
       signal: `${aspect}${status.doorsOpen ? " (doors)" : ""} [Drive]`,
     });
   } else {
-    updatePlayer(player, input.keys, colliders, frameDt);
+    tiles.update(player.position, renderCtx.scene);
+    updatePlayer(player, input.keys, activeColliders(), frameDt, heightAt(path, player.position.x, player.position.z));
     playerMesh.position.set(player.position.x, player.position.y + 0.9, player.position.z);
     // camera follow player
     const cam = renderCtx.camera;
     cam.position.lerp(new THREE.Vector3(player.position.x, player.position.y + 5, player.position.z + 8), 0.1);
     cam.lookAt(player.position.x, player.position.y + 1, player.position.z);
-    tiles.update(player.position, renderCtx.scene);
     updateHud({
       speedKmh: 0,
       speedLimitKmh: speedLimitAt(route, state.distance),
@@ -116,7 +149,7 @@ function loop(now: number) {
     });
   }
 
-  renderCtx.renderer.render(renderCtx.scene, renderCtx.camera);
+  renderCtx.render();
   requestAnimationFrame(loop);
 }
 requestAnimationFrame(loop);

@@ -16,7 +16,7 @@ const GRAVITY = -18;
 const WALK_SPEED = 5;
 
 
-export function updatePlayer(p: PlayerState, keys: Set<string>, colliders: AABB[], dt: number) {
+export function updatePlayer(p: PlayerState, keys: Set<string>, colliders: AABB[], dt: number, groundY = 0) {
   const fwd = keys.has("KeyW") ? 1 : keys.has("KeyS") ? -1 : 0;
   const strafe = keys.has("KeyD") ? 1 : keys.has("KeyA") ? -1 : 0;
   // movement in world X/Z (no camera-relative for simplicity)
@@ -55,7 +55,7 @@ export function updatePlayer(p: PlayerState, keys: Set<string>, colliders: AABB[
       }
     }
   }
-  if (p.position.y < 0) { p.position.y = 0; p.velocity.y = 0; p.onGround = true; }
+  if (p.position.y < groundY) { p.position.y = groundY; p.velocity.y = 0; p.onGround = true; }
 }
 
 function insideXZ(p: Vec3, c: AABB) {
