@@ -11,14 +11,14 @@ describe("rail", () => {
   });
   it("positionAt(0) is first node", () => {
     const p = positionAt(path, 0);
-    expect(p.x).toBe(routeNodes[0].x);
-    expect(p.z).toBe(routeNodes[0].z);
+    expect(p.x).toBeCloseTo(routeNodes[0].x, 5);
+    expect(p.z).toBeCloseTo(routeNodes[0].z, 5);
   });
   it("positionAt(total) is last node", () => {
     const p = positionAt(path, path.totalLength);
     const last = routeNodes[routeNodes.length - 1];
-    expect(p.x).toBe(last.x);
-    expect(p.z).toBe(last.z);
+    expect(p.x).toBeCloseTo(last.x, 5);
+    expect(p.z).toBeCloseTo(last.z, 5);
   });
   it("tangent length ~1", () => {
     const t = tangentAt(path, 100);

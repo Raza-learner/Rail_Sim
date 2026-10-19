@@ -330,66 +330,75 @@ export function buildStations(scene: THREE.Scene, path: RailPath, stations: Stat
   }
 }
 
+// Curved-path rail meshes: continuous triangle-strip ribbons instead of one
+// box per polyline segment — the dense spline path would explode mesh count.
+function addRibbon(
+  scene: THREE.Scene,
+  path: RailPath,
+  lateral: number,
+  width: number,
+  y: number,
+  mat: THREE.Material,
+) {
+  const n = path.nodes.length;
+  const pos = new Float32Array(n * 6);
+  for (let i = 0; i < n; i++) {
+    const a = path.nodes[Math.max(0, i - 1)];
+    const b = path.nodes[Math.min(n - 1, i + 1)];
+    const tx = b.x - a.x, tz = b.z - a.z;
+    const len = Math.hypot(tx, tz) || 1;
+    const rx = tz / len, rz = -tx / len;
+    const cx = path.nodes[i].x + rx * lateral;
+    const cz = path.nodes[i].z + rz * lateral;
+    const cy = path.nodes[i].y + y;
+    pos[i * 6 + 0] = cx + rx * width / 2;
+    pos[i * 6 + 1] = cy;
+    pos[i * 6 + 2] = cz + rz * width / 2;
+    pos[i * 6 + 3] = cx - rx * width / 2;
+    pos[i * 6 + 4] = cy;
+    pos[i * 6 + 5] = cz - rz * width / 2;
+  }
+  const idx: number[] = [];
+  for (let i = 0; i < n - 1; i++) {
+    idx.push(i * 2, (i + 1) * 2, i * 2 + 1, i * 2 + 1, (i + 1) * 2, (i + 1) * 2 + 1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  scene.add(new THREE.Mesh(geo, mat));
+}
+
 export function buildRails(scene: THREE.Scene, path: RailPath) {
   const gauge = 0.7175;
   const railMat = new THREE.MeshToonMaterial({ color: 0x2b2f36 });
   const sleeperMat = new THREE.MeshToonMaterial({ color: 0x6b5136 });
   const ballastMat = new THREE.MeshToonMaterial({ color: 0x8f8a7e });
 
-  const sleepers: { x: number; y: number; z: number; yaw: number }[] = [];
-
-  for (let i = 1; i < path.nodes.length; i++) {
-    const a = snapshot(path, path.cumDist[i - 1]);
-    const b = snapshot(path, path.cumDist[i]);
-    const len = path.segLengths[i - 1];
-    const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
-    const dir = { x: b.x - a.x, z: b.z - a.z };
-    const yaw = Math.atan2(dir.x, dir.z);
-    const r = rightOf(dir);
-
-    const ballast = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.3, len + 0.4), ballastMat);
-    ballast.position.set(mid.x, mid.y - 0.08, mid.z);
-    ballast.rotation.y = yaw;
-    scene.add(ballast);
-
-    for (const off of [-gauge, gauge]) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.14, len + 0.3), railMat);
-      rail.position.set(mid.x + r.x * off, mid.y + 0.16, mid.z + r.z * off);
-      rail.rotation.y = yaw;
-      scene.add(rail);
-    }
-
-    const count = Math.floor(len / 0.6);
-    for (let k = 0; k < count; k++) {
-      const t = (k + 0.5) / count;
-      sleepers.push({
-        x: a.x + (b.x - a.x) * t,
-        y: a.y + (b.y - a.y) * t + 0.02,
-        z: a.z + (b.z - a.z) * t,
-        yaw,
-      });
-    }
+  // ballast bed and the two running rails as continuous ribbons
+  addRibbon(scene, path, 0, 3.6, -0.04, ballastMat);
+  for (const off of [-gauge, gauge]) {
+    addRibbon(scene, path, off, 0.14, 0.16, railMat);
   }
 
+  // sleepers at fixed 0.6 m intervals along arc length, aligned to tangent
+  const count = Math.floor(path.totalLength / 0.6);
   const inst = new THREE.InstancedMesh(
     new THREE.BoxGeometry(2.6, 0.12, 0.24),
     sleeperMat,
-    sleepers.length,
+    count,
   );
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const one = new THREE.Vector3(1, 1, 1);
   const up = new THREE.Vector3(0, 1, 0);
-  sleepers.forEach((s, idx) => {
-    q.setFromAxisAngle(up, s.yaw);
-    m.compose(new THREE.Vector3(s.x, s.y, s.z), q, one);
-    inst.setMatrixAt(idx, m);
-  });
+  for (let k = 0; k < count; k++) {
+    const p = positionAt(path, (k + 0.5) * 0.6);
+    const t = tangentAt(path, (k + 0.5) * 0.6);
+    q.setFromAxisAngle(up, Math.atan2(t.x, t.z));
+    m.compose(new THREE.Vector3(p.x, p.y + 0.02, p.z), q, one);
+    inst.setMatrixAt(k, m);
+  }
   inst.instanceMatrix.needsUpdate = true;
   scene.add(inst);
-}
-
-function snapshot(path: RailPath, s: number) {
-  const p = positionAt(path, s);
-  return p;
 }
