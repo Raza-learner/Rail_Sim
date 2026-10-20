@@ -342,7 +342,10 @@ function addRibbon(
 ) {
   const n = path.nodes.length;
   const pos = new Float32Array(n * 6);
+  const uv = new Float32Array(n * 4);
+  let dist = 0;
   for (let i = 0; i < n; i++) {
+    if (i > 0) dist += Math.hypot(path.nodes[i].x - path.nodes[i - 1].x, path.nodes[i].z - path.nodes[i - 1].z);
     const a = path.nodes[Math.max(0, i - 1)];
     const b = path.nodes[Math.min(n - 1, i + 1)];
     const tx = b.x - a.x, tz = b.z - a.z;
@@ -357,26 +360,72 @@ function addRibbon(
     pos[i * 6 + 3] = cx - rx * width / 2;
     pos[i * 6 + 4] = cy;
     pos[i * 6 + 5] = cz - rz * width / 2;
+    uv[i * 4 + 0] = 1;
+    uv[i * 4 + 1] = dist / 8; // texture tile every 8 m along the line
+    uv[i * 4 + 2] = 0;
+    uv[i * 4 + 3] = uv[i * 4 + 1];
   }
   const idx: number[] = [];
   for (let i = 0; i < n - 1; i++) {
-    idx.push(i * 2, (i + 1) * 2, i * 2 + 1, i * 2 + 1, (i + 1) * 2, (i + 1) * 2 + 1);
+    // CCW from above so strip normals face up (was culled: invisible ground-up)
+    idx.push(i * 2, i * 2 + 1, (i + 1) * 2, i * 2 + 1, (i + 1) * 2 + 1, (i + 1) * 2);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
   geo.setIndex(idx);
   geo.computeVertexNormals();
   scene.add(new THREE.Mesh(geo, mat));
+}
+
+// gravel with grass-fringe edges so the bed melts into the meadow
+let ballastTex: THREE.Texture | null = null;
+function ballastTexture(): THREE.Texture {
+  if (!ballastTex) {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 256;
+    const ctx = c.getContext("2d")!;
+    let seed = 424242;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    ctx.fillStyle = "#7aa85a";
+    ctx.fillRect(0, 0, 256, 256);
+    // gravel bed: ragged-edged horizontal band across the middle
+    ctx.fillStyle = "#b7b3a7";
+    for (let i = 0; i < 14; i++) {
+      const x = i * 18 + rand() * 6;
+      ctx.fillRect(x, 18 + rand() * 8, 16, 256 - 36 - rand() * 8);
+    }
+    // speckle
+    for (let i = 0; i < 900; i++) {
+      const y = 40 + rand() * 176;
+      ctx.fillStyle = rand() > 0.5 ? "rgba(62,60,56,0.5)" : "rgba(226,222,212,0.55)";
+      ctx.fillRect(rand() * 256, y, 2 + rand() * 2.5, 2);
+    }
+    // faint sleeper shadow bands every 0.6 m (13 per 8 m tile)
+    ctx.fillStyle = "rgba(40,36,30,0.16)";
+    for (let i = 0; i < 13; i++) ctx.fillRect(0, 24 + (i * 256) / 13, 256, 7);
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+    ballastTex = tex;
+  }
+  return ballastTex;
 }
 
 export function buildRails(scene: THREE.Scene, path: RailPath) {
   const gauge = 0.7175;
   const railMat = new THREE.MeshToonMaterial({ color: 0x2b2f36 });
   const sleeperMat = new THREE.MeshToonMaterial({ color: 0x6b5136 });
-  const ballastMat = new THREE.MeshToonMaterial({ color: 0x8f8a7e });
+  const ballastMat = new THREE.MeshToonMaterial({ map: ballastTexture() });
 
-  // ballast bed and the two running rails as continuous ribbons
-  addRibbon(scene, path, 0, 3.6, -0.04, ballastMat);
+  // ballast bed and the two running rails as continuous ribbons; bed sits
+  // just above the corridor ground (terrain is flat 0 inside the corridor)
+  addRibbon(scene, path, 0, 6.2, 0.05, ballastMat);
   for (const off of [-gauge, gauge]) {
     addRibbon(scene, path, off, 0.14, 0.16, railMat);
   }

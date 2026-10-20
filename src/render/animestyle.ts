@@ -100,6 +100,10 @@ export function addSky(scene: THREE.Scene) {
   const mat = new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, fog: false, depthWrite: false });
   const sky = new THREE.Mesh(geo, mat);
   sky.name = "sky";
+  // draw before everything opaque: anything (terrain, backdrop) painted later
+  // must win depth against the empty sky shell
+  sky.renderOrder = -1000;
+  sky.frustumCulled = false;
   scene.add(sky);
 }
 
@@ -121,7 +125,7 @@ export function addSun(scene: THREE.Scene) {
   const sun = new THREE.Sprite(
     new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, opacity: 0.85 }),
   );
-  sun.position.set(1400, 900, 2600);
+  sun.position.set(1400, 1500, 2600);
   sun.scale.set(520, 520, 1);
   sun.name = "sun";
   scene.add(sun);

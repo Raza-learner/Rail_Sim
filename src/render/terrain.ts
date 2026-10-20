@@ -48,7 +48,10 @@ function baseHeight(x: number, z: number): number {
 export function heightAt(path: RailPath, x: number, z: number): number {
   const d = distanceToTrack(path, x, z);
   const corridor = smoothstep(40, 210, d);
-  let h = baseHeight(x, z) * corridor;
+  // low meadow swells start a little off the line so the corridor floor is
+  // not a billiard table; the station zone (<20 m) stays perfectly flat
+  const swell = 1.1 * Math.sin(x * 0.045 + z * 0.02) * Math.cos(z * 0.031 + x * 0.017) * smoothstep(28, 90, d);
+  let h = baseHeight(x, z) * corridor + swell;
 
   const riverEdge = Math.abs(z - RIVER_Z);
   const river = 1 - smoothstep(RIVER_HALF, RIVER_HALF + 22, riverEdge);
@@ -56,15 +59,15 @@ export function heightAt(path: RailPath, x: number, z: number): number {
   return h;
 }
 
-// Soft anime meadow: large low-contrast blobs blended with radial gradients
-// instead of hard rectangles. Hard-edged patches at small repeat scales read
-// as pixel camo from the follow camera; soft big features read as fields.
+// Painted farmland patchwork: crisp rotated plots with crop-row strokes and
+// tan farm paths, like hand-painted anime field backgrounds. Soft hue blobs
+// stay small in count unlike alleong noise so nothing reads as a stain.
 function fieldTexture(repeat: number): THREE.Texture {
   const size = 512;
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#83b262";
+  ctx.fillStyle = "#79b356";
   ctx.fillRect(0, 0, size, size);
   let seed = 1234;
   const rand = () => {
@@ -88,81 +91,83 @@ function fieldTexture(repeat: number): THREE.Texture {
     }
     ctx.globalAlpha = 1;
   };
-  // crisp-edged rotated field plots: fully contained in the tile so tiling
-  // stays seamless. This is what gives the farmland-patchwork read.
-  for (let i = 0; i < 9; i++) {
-    const w = 70 + rand() * 130;
-    const h = 50 + rand() * 110;
+  for (let i = 0; i < 22; i++) {
+    const tone = tones[i % tones.length];
+    drawBlob(rand() * size, rand() * size, 60 + rand() * 130, tone, 0.38, 0.75);
+  }
+  // golden drifts between plots: warmer fields catch the eye like the refs
+  for (let i = 0; i < 5; i++) {
+    drawBlob(rand() * size, rand() * size, 55 + rand() * 85, "#d3bb6d", 0.3);
+  }
+  // crisp-edged rotated field plots with crop rows inside — the core of the
+  // patchwork read. Fully contained so tiling stays seamless.
+  for (let i = 0; i < 11; i++) {
+    const w = 80 + rand() * 140;
+    const h = 60 + rand() * 110;
     const px = w + rand() * (size - 2 * w);
     const py = h + rand() * (size - 2 * h);
     const a = rand() * Math.PI;
     const fill = [
-      "#8fbb62", "#a9c977", "#7dab55", "#d0bb66", "#95c46c", "#c9ad62",
-    ][i % 6];
+      "#6fae52", "#b7c565", "#d0be6a", "#a3ca7e", "#bda163", "#8cbb58",
+      "#c9ad62", "#95c46c",
+    ][i % 8];
     ctx.save();
     for (const dx of [-size, 0, size]) {
       for (const dy of [-size, 0, size]) {
         ctx.save();
         ctx.translate(px + dx, py + dy);
         ctx.rotate(a);
-        ctx.globalAlpha = 0.85;
+        ctx.globalAlpha = 0.95;
         ctx.fillStyle = fill;
         ctx.fillRect(-w / 2, -h / 2, w, h);
-        ctx.strokeStyle = "rgba(58,84,46,0.35)";
-        ctx.lineWidth = 3;
+        // crop rows: parallel strokes across the plot
+        ctx.globalAlpha = 0.13;
+        ctx.strokeStyle = "rgba(46,74,36,1)";
+        ctx.lineWidth = 2;
+        for (let r0 = -w / 2 + 7; r0 < w / 2 - 3; r0 += 9) {
+          ctx.beginPath();
+          ctx.moveTo(r0, -h / 2 + 3);
+          ctx.lineTo(r0, h / 2 - 3);
+          ctx.stroke();
+        }
+        ctx.globalAlpha = 0.5;
+        ctx.strokeStyle = "rgba(44,72,36,1)";
+        ctx.lineWidth = 4;
         ctx.strokeRect(-w / 2, -h / 2, w, h);
         ctx.restore();
       }
     }
     ctx.restore();
   }
-  for (let i = 0; i < 40; i++) {
-    const tone = tones[i % tones.length];
-    drawBlob(rand() * size, rand() * size, 60 + rand() * 130, tone, 0.5, 0.75);
-  }
-  // grass flecks: tiny darker dashes so close-range ground has tooth, while
-  // far away they melt into general tone (small enough to alias away)
-  ctx.fillStyle = "rgba(56,88,52,0.35)";
-  for (let i = 0; i < 900; i++) {
-    const x = rand() * size;
-    const y = rand() * size;
-    ctx.fillRect(x, y, 2 + rand() * 2, 2);
-  }
-  ctx.fillStyle = "rgba(210,238,160,0.28)";
-  for (let i = 0; i < 500; i++) {
-    const x = rand() * size;
-    const y = rand() * size;
-    ctx.fillRect(x, y, 2 + rand() * 2, 2);
-  }
-  // golden farmland patches, more visible than before — the reference fields
-  // alternate yellow-green plots against deep green
-  for (let i = 0; i < 7; i++) {
-    drawBlob(rand() * size, rand() * size, 55 + rand() * 85, "#d3bb6d", 0.34);
-  }
-  // light meadow highlights
-  for (let i = 0; i < 12; i++) {
-    drawBlob(rand() * size, rand() * size, 30 + rand() * 45, "#b0d48a", 0.3);
-  }
-  // blurred grid of field dividers: darker boundary lines so the plain reads
-  // as cultivated plots divided by paths, like the flattened farmland view
-  ctx.strokeStyle = "rgba(52,82,44,0.13)";
-  ctx.lineWidth = 3;
+  // tan farm paths dividing fields
+  ctx.strokeStyle = "rgba(206,186,138,0.4)";
+  ctx.lineWidth = 9;
   for (let i = 0; i < 3; i++) {
     const y = Math.round(rand() * size);
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(size, y);
     ctx.stroke();
-    const x = Math.round(rand() * size);
-    ctx.beginPath();
-    ctx.moveTo(x, 0);
-    ctx.lineTo(x, size);
-    ctx.stroke();
+  }
+  const x = Math.round(rand() * size);
+  ctx.beginPath();
+  ctx.moveTo(x, 0);
+  ctx.lineTo(x, size);
+  ctx.stroke();
+  // grass flecks: tiny dashes so close-range ground has tooth
+  ctx.fillStyle = "rgba(56,88,52,0.22)";
+  for (let i = 0; i < 450; i++) {
+    ctx.fillRect(rand() * size, rand() * size, 2 + rand() * 2, 2);
+  }
+  ctx.fillStyle = "rgba(210,238,160,0.2)";
+  for (let i = 0; i < 300; i++) {
+    ctx.fillRect(rand() * size, rand() * size, 2 + rand() * 2, 2);
   }
   const tex = new THREE.CanvasTexture(c);
   tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
   tex.repeat.set(repeat, repeat);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8; // crisp plots at grazing angles instead of grey mush
   return tex;
 }
 

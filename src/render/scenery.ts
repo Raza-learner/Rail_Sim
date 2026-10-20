@@ -111,12 +111,7 @@ function buildPoles(scene: THREE.Scene, path: RailPath) {
 }
 
 function buildHills(scene: THREE.Scene, path: RailPath) {
-  // far band: blue-violet peaks with snow caps, hazed into the sky
-  const farMats = [0x7186bb, 0x8295c9, 0x657aae].map(
-    (c) => new THREE.MeshToonMaterial({ color: c }),
-  );
-  const snowMat = new THREE.MeshToonMaterial({ color: 0xf4f8fc });
-  // mid band: varied green ridges with silhouette weight
+  buildBackdrop(scene, path); // far mountain bands, behind the green ridge line
   const nearMats = [0x6d9a6a, 0x7fa870, 0x629066, 0x79a862].map(
     (c) => new THREE.MeshToonMaterial({ color: c }),
   );
@@ -128,33 +123,6 @@ function buildHills(scene: THREE.Scene, path: RailPath) {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
-
-  // snow-capped far peaks: sharp jagged silhouette (4-6 segments), a white
-  // cone stacked at the tip covers the apex like the reference ranges
-  for (let i = 0; i < 22; i++) {
-    const a = (i / 22) * Math.PI * 2 + rand() * 0.5;
-    const rad = 4800 + rand() * 900;
-    const h = 620 + rand() * 560;
-    const r = h * (1.5 + rand() * 0.7);
-    const x = Math.cos(a) * rad;
-    const z = Math.sin(a) * rad + 1800;
-    if (clear(x, z, r)) continue;
-    const peak = new THREE.Group();
-    const mat = farMats[i % farMats.length];
-    const base = new THREE.Mesh(new THREE.ConeGeometry(r, h, 4 + Math.floor(rand() * 3)), mat);
-    base.position.y = h / 2 - 80;
-    base.name = "hill";
-    peak.add(base);
-    const sr = r * 0.42;
-    const sh = h * 0.32;
-    const snow = new THREE.Mesh(new THREE.ConeGeometry(sr, sh, 4 + Math.floor(rand() * 3)), snowMat);
-    snow.position.y = h - sh / 2 - 80;
-    snow.rotation.y = rand() * Math.PI;
-    snow.name = "hill";
-    peak.add(snow);
-    peak.position.set(x, 0, z);
-    scene.add(peak);
-  }
   for (let i = 0; i < 18; i++) {
     const a = (i / 18) * Math.PI * 2 + 0.2 + rand() * 0.5;
     const rad = 2200 + rand() * 700;
@@ -164,12 +132,78 @@ function buildHills(scene: THREE.Scene, path: RailPath) {
     const z = Math.sin(a) * rad + 1800;
     if (clear(x, z, r)) continue;
     const hill = new THREE.Mesh(
-      new THREE.ConeGeometry(r, h, 5 + Math.floor(rand() * 3)),
+      jaggedCone(r, h, 5 + Math.floor(rand() * 3), 0.18, rand),
       nearMats[i % nearMats.length],
     );
     hill.name = "hill";
     hill.position.set(x, h / 2 - 40, z);
     scene.add(hill);
+  }
+}
+
+// Radially jittered cone: irregular ridgeline instead of a crisp polygon.
+function jaggedCone(r: number, h: number, seg: number, jitter: number, rand: () => number): THREE.BufferGeometry {
+  const g = new THREE.ConeGeometry(r, h, seg, 1);
+  const pos = g.attributes.position as THREE.BufferAttribute;
+  const ph1 = rand() * Math.PI * 2;
+  const ph2 = rand() * Math.PI * 2;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    const th = Math.atan2(z, x);
+    const s = 1 + jitter * (0.6 * Math.sin(th * 3 + ph1) + 0.4 * Math.sin(th * 7 + ph2));
+    pos.setX(i, x * s);
+    pos.setZ(i, z * s);
+  }
+  pos.needsUpdate = true;
+  g.computeVertexNormals();
+  return g;
+}
+
+// Mountain range: three rings of jagged silhouette cones behind the green
+// hills — pale blue slate bluing with distance, snow-capped farthest out.
+// Real geometry instead of a panorama texture: overlap hides cone seams.
+function buildBackdrop(scene: THREE.Scene, path: RailPath) {
+  // keep cone skirts clear of the corridor
+  const clear = (x: number, z: number, base: number) => distanceToTrack(path, x, z) < base + 350;
+  let seed = 90210;
+  const rand = () => {
+    seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const snowMat = new THREE.MeshToonMaterial({ color: 0xf4f8fc });
+  const rings: { count: number; rad: number; spread: number; h: number; hSpread: number; wide: number; colors: number[]; snow: number }[] = [
+    { count: 20, rad: 3900, spread: 450, h: 240, hSpread: 300, wide: 2.0, colors: [0x7f9db1, 0x8aa6b5, 0x799683], snow: 0 },
+    { count: 22, rad: 4900, spread: 450, h: 420, hSpread: 520, wide: 1.6, colors: [0x9db6cf, 0xa8bfd6], snow: 780 },
+    { count: 20, rad: 5900, spread: 500, h: 520, hSpread: 600, wide: 1.3, colors: [0xbecde1, 0xc8d5e6], snow: 900 },
+  ];
+  const mats = rings.map((rg) => rg.colors.map((c) => new THREE.MeshToonMaterial({ color: c })));
+  for (const [ri, rg] of rings.entries()) {
+    for (let i = 0; i < rg.count; i++) {
+      const a = ((i + rand() * 0.6) / rg.count) * Math.PI * 2;
+      const rad = rg.rad + rand() * rg.spread;
+      const h = rg.h + rand() * rg.hSpread;
+      const r = h * (rg.wide + rand() * 0.6);
+      const x = Math.cos(a) * rad;
+      const z = Math.sin(a) * rad + 1800;
+      if (clear(x, z, r)) continue;
+      const peak = new THREE.Mesh(
+        jaggedCone(r, h, 5 + Math.floor(rand() * 3), 0.15, rand),
+        mats[ri][(i + ri) % mats[ri].length],
+      );
+      peak.name = "hill";
+      peak.position.set(x, h / 2 - 40, z);
+      scene.add(peak);
+      if (h > rg.snow) {
+        const sr = r * 0.42;
+        const sh = h * 0.32;
+        const snow = new THREE.Mesh(jaggedCone(sr, sh, 4 + Math.floor(rand() * 3), 0.1, rand), snowMat);
+        snow.name = "hill";
+        snow.position.set(x + r * 0.08, h - sh / 2 - 40, z - r * 0.06);
+        snow.rotation.y = rand() * Math.PI;
+        scene.add(snow);
+      }
+    }
   }
 }
 
@@ -399,22 +433,22 @@ export function planScatter(path: RailPath): Scatter {
     }
   }
 
-  // grass tufts right beside the line (10-30 m), so the corridor cut reads as
-  // rough meadow instead of flat texture
+  // grass tufts beside the line (9-55 m) so the corridor cut reads as rough
+  // meadow out to where trees take over, not just right beside the rails
   const grass: FloraItem[] = [];
   const GRASS_COLORS = [0x7fae5a, 0x8fbc62, 0x74a352, 0x9bc46a];
-  for (let i = 0; i < 4200 && grass.length < 2400; i++) {
-    const x = (rand() - 0.5) * 500;
+  for (let i = 0; i < 9000 && grass.length < 4800; i++) {
+    const x = (rand() - 0.5) * 340;
     const z = rand() * 3600;
     const d = distanceToTrack(path, x, z);
-    if (d < 9 || d > 26) continue;
+    if (d < 9 || d > 55) continue;
     const y = heightAt(path, x, z);
     if (y < -0.5) continue;
     grass.push({
       x,
       y,
       z,
-      s: 1.1 + rand() * 0.9,
+      s: 1.2 + rand() * 1.2,
       yaw: rand() * Math.PI,
       c: Math.floor(rand() * GRASS_COLORS.length),
     });
@@ -499,7 +533,7 @@ const swayUniforms = { uTime: { value: 0 } };
 export function updateSway(time: number) {
   swayUniforms.uTime.value = time;
 }
-function addSway(mat: THREE.MeshBasicMaterial) {
+function addSway(mat: THREE.MeshToonMaterial) {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uTime = swayUniforms.uTime;
     shader.vertexShader = shader.vertexShader
@@ -524,8 +558,8 @@ function addSway(mat: THREE.MeshBasicMaterial) {
   };
 }
 
-let flowerMat: THREE.MeshBasicMaterial | null = null;
-function flowerMaterial(): THREE.MeshBasicMaterial {
+let flowerMat: THREE.MeshToonMaterial | null = null;
+function flowerMaterial(): THREE.MeshToonMaterial {
   if (!flowerMat) {
     const c = document.createElement("canvas");
     c.width = c.height = 64;
@@ -543,7 +577,7 @@ function flowerMaterial(): THREE.MeshBasicMaterial {
     ctx.fill();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    flowerMat = new THREE.MeshBasicMaterial({
+    flowerMat = new THREE.MeshToonMaterial({
       map: tex,
       alphaTest: 0.5,
       side: THREE.DoubleSide,
@@ -553,8 +587,8 @@ function flowerMaterial(): THREE.MeshBasicMaterial {
   return flowerMat;
 }
 
-let grassMat: THREE.MeshBasicMaterial | null = null;
-function grassMaterial(): THREE.MeshBasicMaterial {
+let grassMat: THREE.MeshToonMaterial | null = null;
+function grassMaterial(): THREE.MeshToonMaterial {
   if (!grassMat) {
     const c = document.createElement("canvas");
     c.width = c.height = 64;
@@ -575,7 +609,7 @@ function grassMaterial(): THREE.MeshBasicMaterial {
     }
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    grassMat = new THREE.MeshBasicMaterial({
+    grassMat = new THREE.MeshToonMaterial({
       map: tex,
       alphaTest: 0.5,
       side: THREE.DoubleSide,
@@ -690,7 +724,7 @@ export function buildTileScenery(scatter: Scatter): THREE.Group {
 function addFlora(
   g: THREE.Group,
   items: FloraItem[],
-  mat: THREE.MeshBasicMaterial,
+  mat: THREE.MeshToonMaterial,
   colors: number[],
 ): void {
   if (items.length === 0) return;

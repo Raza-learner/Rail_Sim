@@ -25,7 +25,7 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0xe9f3f8);
   // fog matches the sky horizon so distant terrain melts into the backdrop
-  scene.fog = new THREE.Fog(0xe9f3f8, 1200, 4200);
+  scene.fog = new THREE.Fog(0xe9f3f8, 1600, 7000);
 
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 8000);
   camera.position.set(0, 8, -15);
