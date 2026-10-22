@@ -56,9 +56,15 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const pxr = renderer.getPixelRatio();
   const inkDepth = new THREE.DepthTexture(window.innerWidth * pxr, window.innerHeight * pxr);
   inkDepth.type = THREE.UnsignedIntType;
+  // samples:4 = MSAA in the post chain — the renderer's `antialias` flag is
+  // ignored when rendering through a composer target, so without this every
+  // geometry edge (unlike the flat sky) renders pixel-hard aliased
   const composer = new EffectComposer(
     renderer,
-    new THREE.WebGLRenderTarget(window.innerWidth * pxr, window.innerHeight * pxr, { depthTexture: inkDepth }),
+    new THREE.WebGLRenderTarget(window.innerWidth * pxr, window.innerHeight * pxr, {
+      depthTexture: inkDepth,
+      samples: 4,
+    }),
   );
   composer.renderTarget2.depthTexture = composer.renderTarget1.depthTexture;
   composer.setSize(window.innerWidth, window.innerHeight);
@@ -79,7 +85,7 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
         texel: { value: new THREE.Vector2(1 / (window.innerWidth * pxr), 1 / (window.innerHeight * pxr)) },
         nearP: { value: camera.near },
         farP: { value: camera.far },
-        strength: { value: 0.55 },
+        strength: { value: 0.45 },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -104,8 +110,8 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
           float t = lin(vUv + vec2(0.0, texel.y));
           float c = lin(vUv);
           float rel = ((l + r + b + t) - 4.0 * c) / max(c, 1.0);
-          float e = max(rel, 0.0) / 0.06 + max(-rel, 0.0) / 0.30;
-          float ink = clamp(e, 0.0, 1.0) * strength * (1.0 - smoothstep(250.0, 750.0, c));
+          float e = max(rel, 0.0) / 0.09 + max(-rel, 0.0) / 0.40;
+          float ink = clamp(e, 0.0, 1.0) * strength * (1.0 - smoothstep(150.0, 500.0, c));
           vec3 lineCol = min(
             min(texture2D(tDiffuse, vUv - vec2(texel.x, 0.0)).rgb, texture2D(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb),
             min(texture2D(tDiffuse, vUv - vec2(0.0, texel.y)).rgb, texture2D(tDiffuse, vUv + vec2(0.0, texel.y)).rgb)
@@ -121,7 +127,7 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const paint = new ShaderPass({
     uniforms: {
       tDiffuse: { value: null },
-      strength: { value: 0.3 },
+      strength: { value: 0.16 },
       texel: { value: new THREE.Vector2(1 / (window.innerWidth * pxr), 1 / (window.innerHeight * pxr)) },
     },
     vertexShader: `
