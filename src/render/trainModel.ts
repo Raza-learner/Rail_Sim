@@ -284,7 +284,14 @@ function doorPanel(side: number, z: number): THREE.Group {
   return g;
 }
 
-// Single-arm pantograph on the cab roof. Anchored near the cab end (dir).
+// Single-arm pantograph on the cab roof: base rails + lower arms are fixed,
+// the upper arm pair + shoe are driven every frame by updatePantographs so
+// the shoe rides the catenary contact wire (or parks where there's none).
+const PANTO_ELBOW_Y = 4.93; // top of the fixed lower arm pair
+const PANTO_REACH = 1.02; // elbow → shoe, along local z
+const PANTO_HEAD_Z = 0.72;
+const PANTO_PARK_Y = 5.2;
+
 function pantograph(dir: number): THREE.Group {
   const g = new THREE.Group();
   g.position.set(0, 0, dir * 1.0);
@@ -301,15 +308,42 @@ function pantograph(dir: number): THREE.Group {
     lower.position.set(x, 4.36, dir * -0.05);
     lower.rotation.x = dir * -0.42;
     g.add(lower);
-    const upper = box(0.07, 1.0, 0.07, MAT.metal);
-    upper.position.set(x, 5.2, dir * 0.28);
-    upper.rotation.x = dir * 1.05;
-    g.add(upper);
   }
-  const head = box(1.55, 0.05, 0.15, MAT.skirt);
-  head.position.set(0, 5.7, dir * 0.72);
+  const arms: THREE.Mesh[] = [];
+  for (const x of [-0.34, 0.34]) {
+    const arm = new THREE.Mesh(boxGeo(0.07, 1, 0.07), MAT.metal);
+    arm.position.set(x, 5.3, dir * 0.2);
+    g.add(arm);
+    arms.push(arm);
+  }
+  const head = box(1.55, 0.08, 0.3, MAT.skirt);
+  head.position.set(0, 5.7, dir * PANTO_HEAD_Z);
   g.add(head);
+  g.userData.panto = { dir, arms, head };
   return g;
+}
+
+export type PantoRef = { dir: number; arms: THREE.Mesh[]; head: THREE.Mesh; arc: number };
+
+// Rides the contact wire: the callback supplies shoe height per pantograph
+// (arc metres behind the train nose; null = no wire ahead → park folded).
+export function updatePantographs(
+  train: THREE.Group,
+  shoeHeightAt: (arc: number) => number | null,
+) {
+  const refs = train.userData.pantos as PantoRef[] | undefined;
+  if (!refs) return;
+  for (const ref of refs) {
+    const headY = shoeHeightAt(ref.arc) ?? PANTO_PARK_Y;
+    ref.head.position.set(0, headY, ref.dir * PANTO_HEAD_Z);
+    const dy = headY - PANTO_ELBOW_Y;
+    const dz = ref.dir * PANTO_REACH;
+    for (const arm of ref.arms) {
+      arm.position.set(arm.position.x, (PANTO_ELBOW_Y + headY) / 2, ref.dir * 0.21);
+      arm.rotation.x = Math.atan2(dz, dy);
+      arm.scale.y = Math.hypot(dz, dy);
+    }
+  }
 }
 
 // One powered-bogie layout: side frames, centre bolster, two axles with a wheel
@@ -399,6 +433,10 @@ function car(frontCab: boolean, rearCab: boolean): THREE.Group {
   const vent = box(0.8, 0.14, 1.2, MAT.roof);
   vent.position.set(0, deckY + 0.07, 0);
   g.add(vent);
+  // roof cable runway along the deck, feeding the pantograph anchor
+  const cable = box(0.05, 0.05, len - 1.0, MAT.skirt);
+  cable.position.set(0, deckY + 0.03, cz);
+  g.add(cable);
 
   if (frontCab && !rearCab) g.add(pantograph(1));
   else if (rearCab && !frontCab) g.add(pantograph(-1));
@@ -441,10 +479,23 @@ function betweenCarConnector(z: number): THREE.Group {
 export function createTrainModel(): THREE.Group {
   const train = new THREE.Group();
   const n = Math.max(1, TRAIN_CONFIG.carCount);
+  const pantos: PantoRef[] = [];
 
   for (let i = 0; i < n; i++) {
     const c = car(i === 0, i === n - 1);
     c.position.z = -(i * (CAR_LENGTH + TRAIN_CONFIG.carGap) + HALF);
+    const carZ = c.position.z;
+    // register pantographs with their arc offset from the train nose
+    c.traverse((o) => {
+      const p = (o.userData as { panto?: { dir: number; arms: THREE.Mesh[]; head: THREE.Mesh } }).panto;
+      if (!p) return;
+      pantos.push({
+        dir: p.dir,
+        arms: p.arms,
+        head: p.head,
+        arc: carZ + o.position.z + p.dir * PANTO_HEAD_Z,
+      });
+    });
     train.add(c);
     if (i > 0) {
       // gangway bellows bridging the gap to the car ahead
@@ -465,6 +516,7 @@ export function createTrainModel(): THREE.Group {
   });
   train.userData.doors = doors;
   train.userData.wheels = wheels;
+  train.userData.pantos = pantos;
 
   // dev handle for browser-side inspection
   (globalThis as unknown as { RAIL_TRAIN?: THREE.Group }).RAIL_TRAIN = train;

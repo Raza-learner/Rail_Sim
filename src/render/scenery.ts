@@ -168,51 +168,93 @@ function buildCrossing(scene: THREE.Scene, path: RailPath) {
   }
 }
 
+// Catenary constants shared by the wire drawing and the pantograph driver.
+const POLE_START = 10;
+const POLE_SPAN = 90;
+const POLE_LATERAL = 6.5;
+const MESSENGER_H = 8.6; // above the track plane
+const MESSENGER_SAG = 1.15;
+const CONTACT_H = 7.5; // above the track plane
+const CONTACT_SAG = 0.95;
+
 function buildPoles(scene: THREE.Scene, path: RailPath) {
   const poleMat = new THREE.MeshToonMaterial({ color: 0x6b5641 });
   const wireMat = new THREE.LineBasicMaterial({ color: 0x2a2f36 });
-  const tops: THREE.Vector3[] = [];
-  for (let s = 40; s < path.totalLength; s += 90) {
+  const poleS: number[] = [];
+  for (let s = POLE_START; s < path.totalLength; s += POLE_SPAN) poleS.push(s);
+  for (const s of poleS) {
     const p = positionAt(path, s);
     const t = tangentAt(path, s);
     const r = rightOf(t);
-    const x = p.x + r.x * 6.5;
-    const z = p.z + r.z * 6.5;
+    const x = p.x + r.x * POLE_LATERAL;
+    const z = p.z + r.z * POLE_LATERAL;
     const gy = heightAt(path, x, z);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 9, 6), poleMat);
     pole.position.set(x, gy + 4.5, z);
     scene.add(pole);
     const armYaw = Math.atan2(-r.z, r.x);
-    for (const ay of [7.6, 8.6]) {
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.12, 0.12), poleMat);
-      arm.position.set(x, gy + ay, z);
+    for (const ay of [7.6, MESSENGER_H]) {
+      // cantilever arm reaching from the pole across to above the track pair
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(7.0, 0.12, 0.12), poleMat);
+      arm.position.set(p.x + r.x * (POLE_LATERAL - 3.5), gy + ay, p.z + r.z * (POLE_LATERAL - 3.5));
       arm.rotation.y = armYaw;
       scene.add(arm);
     }
-    tops.push(new THREE.Vector3(x, gy + 8.6, z));
   }
-  // two catenary-sagged wires per pole span, sampled in short segments so
-  // the droop reads; pole tops themselves follow the ground line
+  // contact + messenger wires run over the track centreline (not pole-to-pole
+  // beside it) so the pantograph shoe actually rides them; droppers hang the
+  // contact wire from the messenger mid-span
   const pts: number[] = [];
-  const steps = 8;
-  for (let i = 1; i < tops.length; i++) {
-    const a = tops[i - 1];
-    const b = tops[i];
+  const steps = 10;
+  for (let i = 0; i < poleS.length; i++) {
+    const s0 = poleS[i];
+    const s1 = Math.min(s0 + POLE_SPAN, path.totalLength);
     for (let k = 0; k < steps; k++) {
-      const u0 = k / steps;
-      const u1 = (k + 1) / steps;
-      // [height offset from pole top, sag amplitude]
-      for (const [h, sag] of [[0, 1.15], [-1.1, 0.95]] as const) {
+      const sa = s0 + ((s1 - s0) * k) / steps;
+      const sb = s0 + ((s1 - s0) * (k + 1)) / steps;
+      for (const [h, sag] of [
+        [MESSENGER_H, MESSENGER_SAG],
+        [CONTACT_H, CONTACT_SAG],
+      ] as const) {
+        const pa = positionAt(path, sa);
+        const pb = positionAt(path, sb);
+        const ua = (sa - s0) / POLE_SPAN;
+        const ub = (sb - s0) / POLE_SPAN;
         pts.push(
-          a.x + (b.x - a.x) * u0, a.y + (b.y - a.y) * u0 + h - sag * 4 * u0 * (1 - u0), a.z + (b.z - a.z) * u0,
-          a.x + (b.x - a.x) * u1, a.y + (b.y - a.y) * u1 + h - sag * 4 * u1 * (1 - u1), a.z + (b.z - a.z) * u1,
+          pa.x, pa.y + h - sag * 4 * ua * (1 - ua), pa.z,
+          pb.x, pb.y + h - sag * 4 * ub * (1 - ub), pb.z,
         );
       }
+    }
+    // droppers: messenger → contact at three points mid-span
+    for (const du of [0.25, 0.5, 0.75]) {
+      const sd = s0 + (s1 - s0) * du;
+      const pd = positionAt(path, sd);
+      pts.push(
+        pd.x, pd.y + MESSENGER_H - MESSENGER_SAG * 4 * du * (1 - du), pd.z,
+        pd.x, pd.y + CONTACT_H - CONTACT_SAG * 4 * du * (1 - du), pd.z,
+      );
     }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
   scene.add(new THREE.LineSegments(geo, wireMat));
+}
+
+// World-space contact-wire height at arc position s — the exact curve drawn
+// above, so the pantograph shoe can ride the wire with zero eyeballing.
+// null = past the last pole / no wire (pantograph parks folded).
+export function contactWireHeight(path: RailPath, s: number): number | null {
+  if (s > path.totalLength) return null;
+  const lastPole = POLE_START + Math.floor((path.totalLength - POLE_START) / POLE_SPAN) * POLE_SPAN;
+  if (s > lastPole) return null;
+  if (s < POLE_START) return positionAt(path, POLE_START).y + CONTACT_H;
+  const s0 = POLE_START + Math.floor((s - POLE_START) / POLE_SPAN) * POLE_SPAN;
+  const s1 = s0 + POLE_SPAN;
+  const u = (s - s0) / POLE_SPAN;
+  const y0 = positionAt(path, s0).y;
+  const y1 = positionAt(path, s1).y;
+  return y0 + (y1 - y0) * u + CONTACT_H - CONTACT_SAG * 4 * u * (1 - u);
 }
 
 function buildHills(scene: THREE.Scene, path: RailPath) {

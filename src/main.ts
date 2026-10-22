@@ -23,11 +23,10 @@ import { TileManager } from "./world/tiles";
 import * as THREE from "three";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#app")!;
-const renderCtx = createRender(canvas);
+const path = buildRail(route.nodes);
+const renderCtx = createRender(canvas, path);
 const input = new InputManager();
 const updateHud = createHud();
-
-const path = buildRail(route.nodes);
 const stationCtrl = new StationStopController(route);
 const signals = signalsForRoute(route);
 
@@ -115,7 +114,7 @@ function loop(now: number) {
     }
     const pos = positionAt(path, state.distance);
     const tan = tangentAt(path, state.distance);
-    renderCtx.updateTrain(pos, tan, state.velocity);
+    renderCtx.updateTrain(pos, tan, state.velocity, state.distance);
     tiles.update(pos, renderCtx.scene);
 
     const status = stationCtrl.update(state.distance, state.velocity, frameDt);
