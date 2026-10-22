@@ -27,6 +27,93 @@ export function buildStaticScenery(scene: THREE.Scene, path: RailPath) {
   buildBridge(scene, path);
   buildCrossing(scene, path);
   buildPoles(scene, path);
+  buildProps(scene, path);
+}
+
+// Village props: a red post pillar and a バスのりば board beside each village
+// cluster — small landmarks that make the stops feel inhabited. Built static:
+// five clusters × two props, cheaper than plumbing new scatter buckets.
+let busMat: THREE.MeshBasicMaterial | null = null;
+function busStopMaterial(): THREE.MeshBasicMaterial {
+  if (!busMat) {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#f4f1e8";
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = "#c7433b";
+    ctx.fillRect(0, 0, 128, 34);
+    ctx.fillStyle = "#23282e";
+    ctx.textAlign = "center";
+    ctx.font = '38px "Hiragino Kaku Gothic", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
+    ctx.fillText("バス", 64, 82);
+    ctx.font = '20px "Hiragino Kaku Gothic", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
+    ctx.fillText("のりば", 64, 112);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    busMat = new THREE.MeshBasicMaterial({ map: tex });
+  }
+  return busMat;
+}
+
+function buildProps(scene: THREE.Scene, path: RailPath) {
+  for (let c = 0; c < VILLAGES.length; c++) {
+    const p = positionAt(path, VILLAGES[c]);
+    const t = tangentAt(path, VILLAGES[c]);
+    const r = rightOf(t);
+    const side = c % 2 === 0 ? 1 : -1;
+    const yaw = Math.atan2(t.x, t.z);
+    const ax = p.x + r.x * 11 * side;
+    const az = p.z + r.z * 11 * side;
+    const gy = heightAt(path, ax, az);
+
+    // red post pillar
+    const post = new THREE.Group();
+    post.rotation.y = yaw;
+    const base = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.16, 0.18, 0.16, 10),
+      new THREE.MeshToonMaterial({ color: 0x6a6f78 }),
+    );
+    base.position.y = 0.08;
+    post.add(base);
+    const barrel = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.24, 0.24, 1.0, 10),
+      new THREE.MeshToonMaterial({ color: 0xc23b32 }),
+    );
+    barrel.position.y = 0.66;
+    post.add(barrel);
+    const cap = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.2, 0.26, 0.2, 10),
+      new THREE.MeshToonMaterial({ color: 0xc23b32 }),
+    );
+    cap.position.y = 1.26;
+    post.add(cap);
+    const slot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.1, 0.2), new THREE.MeshToonMaterial({ color: 0x23282e }));
+    slot.position.set(0.23, 1.0, 0);
+    post.add(slot);
+    post.position.set(ax, gy, az);
+    scene.add(post);
+
+    // bus-stop board two metres down the street
+    const bx = p.x + r.x * 11 * side + t.x * 2;
+    const bz = p.z + r.z * 11 * side + t.z * 2;
+    const bgy = heightAt(path, bx, bz);
+    const stop = new THREE.Group();
+    stop.rotation.y = yaw;
+    const pole = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.05, 2.3, 6),
+      new THREE.MeshToonMaterial({ color: 0x6b5641 }),
+    );
+    pole.position.y = 1.15;
+    stop.add(pole);
+    const board = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.5, 0.55), busStopMaterial());
+    board.rotation.y = Math.PI / 2; // face the signage outward along the street
+    board.position.y = 2.05;
+    stop.add(board);
+    stop.position.set(bx, bgy, bz);
+    scene.add(stop);
+  }
 }
 
 function buildBridge(scene: THREE.Scene, path: RailPath) {
@@ -101,9 +188,24 @@ function buildPoles(scene: THREE.Scene, path: RailPath) {
     }
     tops.push(new THREE.Vector3(x, gy + 8.6, z));
   }
+  // two catenary-sagged wires per pole span, sampled in short segments so
+  // the droop reads; pole tops themselves follow the ground line
   const pts: number[] = [];
+  const steps = 8;
   for (let i = 1; i < tops.length; i++) {
-    pts.push(tops[i - 1].x, tops[i - 1].y, tops[i - 1].z, tops[i].x, tops[i].y, tops[i].z);
+    const a = tops[i - 1];
+    const b = tops[i];
+    for (let k = 0; k < steps; k++) {
+      const u0 = k / steps;
+      const u1 = (k + 1) / steps;
+      // [height offset from pole top, sag amplitude]
+      for (const [h, sag] of [[0, 1.15], [-1.1, 0.95]] as const) {
+        pts.push(
+          a.x + (b.x - a.x) * u0, a.y + (b.y - a.y) * u0 + h - sag * 4 * u0 * (1 - u0), a.z + (b.z - a.z) * u0,
+          a.x + (b.x - a.x) * u1, a.y + (b.y - a.y) * u1 + h - sag * 4 * u1 * (1 - u1), a.z + (b.z - a.z) * u1,
+        );
+      }
+    }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
@@ -229,6 +331,43 @@ export const GABLE = (() => {
 
 // long face gives houses readable fronts, lazily built: module tests run in
 // node without DOM.
+// Shop boards: white field, coloured frame matching the awning, one big trade
+// kanji with 屋 beneath, and noren stripes filling the far half of the wide
+// face. Lazily cached per (kind, frame) pair.
+const shopSignMats = new Map<string, THREE.MeshBasicMaterial>();
+function shopSignMaterial(i: number): THREE.MeshBasicMaterial {
+  const key = `${i % 4}-${i % 2}`;
+  let mat = shopSignMats.get(key);
+  if (!mat) {
+    const c = document.createElement("canvas");
+    c.width = 512;
+    c.height = 256;
+    const ctx = c.getContext("2d")!;
+    const frame = ["#c7433b", "#396a94"][i % 2];
+    ctx.fillStyle = "#f6f3ea";
+    ctx.fillRect(0, 0, 512, 256);
+    ctx.strokeStyle = frame;
+    ctx.lineWidth = 16;
+    ctx.strokeRect(8, 8, 496, 240);
+    ctx.fillStyle = "#23282e";
+    ctx.textAlign = "center";
+    ctx.font = '110px "Hiragino Kaku Gothic", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
+    ctx.fillText(["米", "菓", "喫", "薬"][i % 4], 140, 150);
+    ctx.font = '64px "Hiragino Kaku Gothic", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
+    ctx.fillText("屋", 140, 236);
+    // noren stripes on the right half
+    ctx.fillStyle = frame;
+    for (const sx of [320, 400, 470]) ctx.fillRect(sx, 16, 28, 224);
+    ctx.fillStyle = "rgba(255,255,255,0.35)";
+    for (const sx of [320, 400, 470]) ctx.fillRect(sx, 120, 28, 20);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    mat = new THREE.MeshBasicMaterial({ map: tex });
+    shopSignMats.set(key, mat);
+  }
+  return mat;
+}
+
 let facadeMat: THREE.MeshBasicMaterial | null = null;
 function facadeMaterial(): THREE.MeshBasicMaterial {
   if (!facadeMat) {
@@ -282,7 +421,9 @@ export function makeHouse(w: number, d: number, h: number, i: number, shop?: 1 |
     house.add(f);
   }
 
-  // street-side shop dressing: canopy slab + hanging sign, above head height
+  // street-side shop dressing: canopy slab + kanji hanging board, above head
+  // height (noren stripes fill the wide face so the board doesn't look
+  // stretched — shop depth varies)
   if (shop) {
     const canopy = new THREE.Mesh(
       new THREE.BoxGeometry(0.55, 0.06, d * 0.7),
@@ -292,7 +433,7 @@ export function makeHouse(w: number, d: number, h: number, i: number, shop?: 1 |
     house.add(canopy);
     const sign = new THREE.Mesh(
       new THREE.BoxGeometry(0.06, 0.9, d * 0.45),
-      new THREE.MeshToonMaterial({ color: i % 2 ? 0xd8524f : 0x396a94 }),
+      shopSignMaterial(i),
     );
     sign.position.set(shop * (w / 2 + 0.1), 3.2, 0);
     house.add(sign);
@@ -305,7 +446,7 @@ export function makeHouse(w: number, d: number, h: number, i: number, shop?: 1 |
 // The layout is planned once (deterministic) and bucketed by tile; tiles only
 // build/dispose the meshes for their own share.
 
-export type TreeItem = { x: number; y: number; z: number; s: number; yaw: number; kind: "pine" | "broad" };
+export type TreeItem = { x: number; y: number; z: number; s: number; yaw: number; kind: "pine" | "broad" | "cherry" };
 export type HouseItem = { x: number; y: number; z: number; w: number; d: number; h: number; i: number; yaw: number; shop?: 1 | -1 };
 export type PaddyItem = { x: number; y: number; z: number; yaw: number };
 export type FloraItem = { x: number; y: number; z: number; s: number; yaw: number; c: number };
@@ -313,6 +454,8 @@ export type Scatter = { trees: TreeItem[]; houses: HouseItem[]; paddies: PaddyIt
 
 const TOWN_S = 3500;
 const TOWN_CLEAR_RADIUS = 140;
+// village cluster centres, shared by planScatter (houses) and buildProps
+const VILLAGES = [140, 900, 1700, 2650, 3300];
 
 function lcg(seed: number) {
   let s = seed;
@@ -334,8 +477,9 @@ export function planScatter(path: RailPath): Scatter {
     const y = heightAt(path, x, z);
     if (y < -0.5) continue; // not in the river
     // pines take the open fields and higher ground; broadleafs cluster near
-    // the line and the villages, like garden trees
-    const kind: TreeItem["kind"] = d > 150 || rand() < 0.35 ? "pine" : "broad";
+    // the line and the villages, with cherries sprinkled into garden trees
+    const kind: TreeItem["kind"] =
+      d > 150 || rand() < 0.35 ? "pine" : rand() < 0.3 ? "cherry" : "broad";
     const s = 0.8 + rand() * 1.4;
     trees.push({ x, y, z, s, yaw: s * 3, kind });
   }
@@ -365,9 +509,8 @@ export function planScatter(path: RailPath): Scatter {
   }
   // villages strung along the line
   const vilRand = lcg(31337);
-  const clusters = [140, 900, 1700, 2650, 3300];
-  for (let c = 0; c < clusters.length; c++) {
-    const center = clusters[c];
+  for (let c = 0; c < VILLAGES.length; c++) {
+    const center = VILLAGES[c];
     const count = 5 + Math.floor(vilRand() * 4);
     for (let i = 0; i < count; i++) {
       const s = Math.max(20, Math.min(path.totalLength - 20, center + (i - count / 2) * 22));
@@ -484,23 +627,27 @@ function coneAt(r: number, h: number, y: number): THREE.BufferGeometry {
   return g;
 }
 
-function blobAt(r: number, y: number, off: [number, number, number] = [0, 0, 0], squash = 1): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(r, 0);
-  g.applyMatrix4(new THREE.Matrix4().makeScale(1, squash, 1));
-  g.translate(off[0], y + off[1], off[2]);
-  return g;
-}
-
 const PINE_CANOPY = mergeGeometries([
   coneAt(1.75, 2.8, 3.3),
   coneAt(1.32, 2.3, 4.6),
   coneAt(0.8, 1.7, 5.6),
 ]);
 
-const BROAD_CANOPY = mergeGeometries([
-  blobAt(1.75, 3.5, [0, 0, 0], 0.82),
-  blobAt(1.2, 4.3, [0.95, 0.3, 0.35]),
-  blobAt(1.05, 4.2, [-0.85, 0.1, -0.4]),
+// Broadleaf/cherry crowns: crossed quads carrying a leaf-cluster atlas, like
+// summer-cycle's foliage. The cutout texture makes the silhouette fluffy; the
+// per-instance tint supplies the green (the atlas stays near-neutral).
+function leafQuad(size: number, y: number, ry: number, rx = 0): THREE.BufferGeometry {
+  const g = new THREE.PlaneGeometry(size, size);
+  g.rotateX(rx);
+  g.rotateY(ry);
+  g.translate(0, y, 0);
+  return g;
+}
+const LEAF_CANOPY = mergeGeometries([
+  leafQuad(3.4, 3.3, 0),
+  leafQuad(3.4, 3.3, Math.PI / 3),
+  leafQuad(3.4, 3.3, (2 * Math.PI) / 3),
+  leafQuad(2.8, 4.5, Math.PI / 4, -Math.PI / 2),
 ]);
 
 const TRUNK_GEO = new THREE.CylinderGeometry(0.16, 0.3, 2.5, 6);
@@ -509,6 +656,38 @@ const CANOPY_MAT = new THREE.MeshToonMaterial({ color: 0xffffff });
 
 const PINE_COLORS = [0x2f6f43, 0x3a7d50, 0x2a5e3a, 0x47855a];
 const BROAD_COLORS = [0x58a24a, 0x6cb454, 0x4f9143, 0x76ae41, 0x8ab84f];
+const CHERRY_COLORS = [0xf2a7c3, 0xf5b3c8, 0xe894b7, 0xfadbe8];
+
+let leafMat: THREE.MeshToonMaterial | null = null;
+function leafMaterial(): THREE.MeshToonMaterial {
+  if (!leafMat) {
+    const S = 128;
+    const c = document.createElement("canvas");
+    c.width = c.height = S;
+    const ctx = c.getContext("2d")!;
+    // near-neutral leaflets; instanceColor tints the whole clump
+    let seed = 60606;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const tones = ["#9aa88e", "#c2cfae", "#e6eed6", "#f4f8e6"];
+    for (let i = 0; i < 40; i++) {
+      const a = rand() * Math.PI * 2;
+      const r = Math.pow(rand(), 0.6) * 46;
+      const x = S / 2 + Math.cos(a) * r;
+      const y = 60 + Math.sin(a) * r * 0.92;
+      ctx.fillStyle = tones[Math.floor(rand() * tones.length)];
+      ctx.beginPath();
+      ctx.arc(x, y, 7 + rand() * 8, 0, Math.PI * 2);
+      ctx.fill();
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    leafMat = new THREE.MeshToonMaterial({ map: tex, alphaTest: 0.5, side: THREE.DoubleSide });
+  }
+  return leafMat;
+}
 
 // ---- flora -------------------------------------------------------------------
 // Textures need the DOM, so they are lazily built singletons; geometries are
@@ -644,6 +823,30 @@ function paddyRiceMaterial(): THREE.MeshToonMaterial {
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
     paddyMat = new THREE.MeshToonMaterial({ map: tex });
+    // cheap planar reflection: the flooded base blends a view-dependent sky
+    // colour (grazing angles reflect the horizon) — reads as a mirror without
+    // a second render pass per paddy
+    paddyMat.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 vWorld;")
+        .replace(
+          "#include <begin_vertex>",
+          "#include <begin_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;",
+        );
+      shader.fragmentShader = shader.fragmentShader
+        .replace("#include <common>", "#include <common>\nvarying vec3 vWorld;")
+        .replace(
+          "#include <map_fragment>",
+          `#include <map_fragment>
+          {
+            vec3 dir = normalize(vWorld - cameraPosition); // camera → fragment
+            float fr = pow(1.0 - clamp(-dir.y, 0.0, 1.0), 2.2);
+            vec3 r = vec3(dir.x, -dir.y, dir.z);
+            vec3 sky = mix(vec3(0.914, 0.953, 0.973), vec3(0.373, 0.690, 0.925), clamp(r.y * 1.3, 0.0, 1.0));
+            diffuseColor.rgb = mix(diffuseColor.rgb, sky, clamp(fr, 0.0, 0.7));
+          }`,
+        );
+    };
   }
   return paddyMat;
 }
@@ -655,9 +858,10 @@ function addCanopy(
   items: TreeItem[],
   geo: THREE.BufferGeometry,
   colors: number[],
+  mat: THREE.Material,
 ): void {
   if (items.length === 0) return;
-  const canopy = new THREE.InstancedMesh(geo, CANOPY_MAT, items.length);
+  const canopy = new THREE.InstancedMesh(geo, mat, items.length);
   const m = new THREE.Matrix4();
   const q = new THREE.Quaternion();
   const col = new THREE.Color();
@@ -711,8 +915,9 @@ export function buildTileScenery(scatter: Scatter): THREE.Group {
     });
     trunk.instanceMatrix.needsUpdate = true;
     g.add(trunk);
-    addCanopy(g, trees.filter((t) => t.kind === "pine"), PINE_CANOPY, PINE_COLORS);
-    addCanopy(g, trees.filter((t) => t.kind !== "pine"), BROAD_CANOPY, BROAD_COLORS);
+    addCanopy(g, trees.filter((t) => t.kind === "pine"), PINE_CANOPY, PINE_COLORS, CANOPY_MAT);
+    addCanopy(g, trees.filter((t) => t.kind === "broad"), LEAF_CANOPY, BROAD_COLORS, leafMaterial());
+    addCanopy(g, trees.filter((t) => t.kind === "cherry"), LEAF_CANOPY, CHERRY_COLORS, leafMaterial());
   }
   addFlora(g, scatter.flowers, flowerMaterial(), FLORA_COLORS);
   addFlora(g, scatter.grass, grassMaterial(), GRASS_COLORS);

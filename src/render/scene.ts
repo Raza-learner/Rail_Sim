@@ -53,6 +53,52 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
     0.95,
   );
   composer.addPass(bloom);
+  // Kuwahara paint: 4-quadrant least-variance smoothing that keeps edges —
+  // a light radius-2 blend for the Ghibli wash without mushing detail
+  const pr = renderer.getPixelRatio();
+  const paint = new ShaderPass({
+    uniforms: {
+      tDiffuse: { value: null },
+      strength: { value: 0.55 },
+      texel: { value: new THREE.Vector2(1 / (window.innerWidth * pr), 1 / (window.innerHeight * pr)) },
+    },
+    vertexShader: `
+      varying vec2 vUv;
+      void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+    fragmentShader: `
+      uniform sampler2D tDiffuse;
+      uniform float strength;
+      uniform vec2 texel;
+      varying vec2 vUv;
+      float lum(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
+      void main() {
+        vec4 src = texture2D(tDiffuse, vUv);
+        float best = 1e9;
+        vec3 col = src.rgb;
+        for (int q = 0; q < 4; q++) {
+          vec3 acc = vec3(0.0);
+          float al = 0.0;
+          float al2 = 0.0;
+          for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+              vec2 o = vec2(float(i) + 0.5, float(j) + 0.5) * texel * 2.0;
+              if (q == 1 || q == 3) o.x = -o.x;
+              if (q == 2 || q == 3) o.y = -o.y;
+              vec3 c = texture2D(tDiffuse, vUv + o).rgb;
+              float l = lum(c);
+              acc += c;
+              al += l;
+              al2 += l * l;
+            }
+          }
+          float m = al / 9.0;
+          float var = max(al2 / 9.0 - m * m, 0.0);
+          if (var < best) { best = var; col = acc / 9.0; }
+        }
+        gl_FragColor = vec4(mix(src.rgb, col, strength), src.a);
+      }`,
+  });
+  composer.addPass(paint);
   const vignette = new ShaderPass({
     uniforms: { tDiffuse: { value: null }, strength: { value: 0.12 } },
     vertexShader: `
@@ -80,6 +126,10 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    paint.uniforms.texel.value.set(
+      1 / (window.innerWidth * renderer.getPixelRatio()),
+      1 / (window.innerHeight * renderer.getPixelRatio()),
+    );
   });
 
   const renderState = { cameraMode: "follow" as CameraMode };

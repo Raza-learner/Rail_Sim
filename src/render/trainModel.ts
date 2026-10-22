@@ -15,15 +15,69 @@ const LIGHT = 0xfff4c8;
 
 const HALF = CAR_LENGTH / 2;
 
+const HUB_GEO = new THREE.CylinderGeometry(0.16, 0.16, 0.2, 10);
+const HUB_MAT = new THREE.MeshToonMaterial({ color: METAL });
+
 function box(w: number, h: number, d: number, color: number): THREE.Mesh {
   return new THREE.Mesh(new THREE.BoxGeometry(w, h, d), new THREE.MeshToonMaterial({ color }));
+}
+
+// ---- canvas textures (DOM-dependent → lazy singletons) ----------------------
+
+// Body livery: cream panels with faint seams every tile and a soft lower
+// shade; tiles every ~3.3 m along the car so seams land as panel joints.
+let liveryTex: THREE.Texture | null = null;
+function liveryMaterial(): THREE.MeshToonMaterial {
+  if (!liveryTex) {
+    const c = document.createElement("canvas");
+    c.width = c.height = 128;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#f2e9d2";
+    ctx.fillRect(0, 0, 128, 128);
+    const grad = ctx.createLinearGradient(0, 118, 0, 128);
+    grad.addColorStop(0, "rgba(90,70,40,0)");
+    grad.addColorStop(1, "rgba(90,70,40,0.16)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 118, 128, 10);
+    ctx.fillStyle = "rgba(90,70,40,0.25)";
+    ctx.fillRect(126, 0, 2, 128); // seam at tile edge
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.wrapS = THREE.RepeatWrapping;
+    tex.repeat.set(6, 1);
+    liveryTex = tex;
+  }
+  return new THREE.MeshToonMaterial({ color: 0xffffff, map: liveryTex });
+}
+
+// Destination blind: black roller with the terminus, backlit so it glows.
+let destTex: THREE.Texture | null = null;
+function destinationMaterial(): THREE.MeshBasicMaterial {
+  if (!destTex) {
+    const c = document.createElement("canvas");
+    c.width = 256;
+    c.height = 64;
+    const ctx = c.getContext("2d")!;
+    ctx.fillStyle = "#14181d";
+    ctx.fillRect(0, 0, 256, 64);
+    ctx.fillStyle = "#f5f2ea";
+    ctx.textAlign = "center";
+    ctx.font = '34px "Hiragino Kaku Gothic", "Noto Sans CJK JP", "Yu Gothic", sans-serif';
+    ctx.fillText("山吹", 128, 42);
+    ctx.font = "13px sans-serif";
+    ctx.fillText("Yamabuki", 128, 58);
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    destTex = tex;
+  }
+  return new THREE.MeshBasicMaterial({ map: destTex });
 }
 
 // A single car centred on the origin, length along Z (-HALF..+HALF).
 function car(frontCab: boolean, rearCab: boolean): THREE.Group {
   const g = new THREE.Group();
 
-  const body = box(CAR_WIDTH, 2.6, CAR_LENGTH, CREAM);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(CAR_WIDTH, 2.6, CAR_LENGTH), liveryMaterial());
   body.position.y = 2.35;
   g.add(body);
 
@@ -57,6 +111,7 @@ function car(frontCab: boolean, rearCab: boolean): THREE.Group {
     eq.position.set(0, 4.02, z);
     g.add(eq);
   }
+  if (frontCab) g.add(pantograph());
 
   const skirt = box(CAR_WIDTH - 0.12, 0.5, CAR_LENGTH - 0.5, DARK);
   skirt.position.y = 0.85;
@@ -75,6 +130,11 @@ function car(frontCab: boolean, rearCab: boolean): THREE.Group {
         wheel.rotation.z = Math.PI / 2;
         wheel.position.set(side * 1.05, 0.42, wz);
         g.add(wheel);
+        // bright hub face so the wheel reads as metal, not a flat disc
+        const hub = new THREE.Mesh(HUB_GEO, HUB_MAT);
+        hub.rotation.z = Math.PI / 2;
+        hub.position.copy(wheel.position);
+        g.add(hub);
       }
     }
   }
@@ -94,6 +154,36 @@ function doorPanel(side: number, z: number): THREE.Group {
   g.add(dw);
   g.position.set(side * (CAR_WIDTH / 2 + 0.03), 2.15, z);
   g.userData.door = { side: side as 1 | -1, rest: z };
+  return g;
+}
+
+// Single-arm pantograph on the cab roof: base rails, one folded arm pair,
+// and a contact head. Anchored near the cab for a classic suburban EMU look.
+function pantograph(): THREE.Group {
+  const g = new THREE.Group();
+  g.position.set(0, 0, 1.0);
+  for (const x of [-0.5, 0.5]) {
+    const rail = box(0.1, 0.05, 1.4, METAL);
+    rail.position.set(x, 3.97, 0);
+    g.add(rail);
+    const ins = box(0.08, 0.2, 0.08, DARK);
+    ins.position.set(x, 4.08, 0.15);
+    g.add(ins);
+  }
+  // arm pairs tilt in the YZ plane; centers span base insulator → elbow → head
+  for (const x of [-0.34, 0.34]) {
+    const lower = box(0.07, 1.25, 0.07, METAL);
+    lower.position.set(x, 4.56, -0.05);
+    lower.rotation.x = -0.42;
+    g.add(lower);
+    const upper = box(0.07, 1.0, 0.07, METAL);
+    upper.position.set(x, 5.4, 0.28);
+    upper.rotation.x = 1.05;
+    g.add(upper);
+  }
+  const head = box(1.55, 0.05, 0.15, DARK);
+  head.position.set(0, 5.9, 0.72);
+  g.add(head);
   return g;
 }
 
@@ -120,7 +210,7 @@ function cab(dir: number): THREE.Group {
   divider.position.set(0, 3.05, out(0.13));
   g.add(divider);
 
-  const sign = box(1.1, 0.28, 0.08, DARK);
+  const sign = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.28, 0.08), destinationMaterial());
   sign.position.set(0, 3.62, out(0.12));
   g.add(sign);
 
