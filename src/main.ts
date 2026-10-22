@@ -115,7 +115,7 @@ function loop(now: number) {
     }
     const pos = positionAt(path, state.distance);
     const tan = tangentAt(path, state.distance);
-    renderCtx.updateTrain(pos, tan);
+    renderCtx.updateTrain(pos, tan, state.velocity);
     tiles.update(pos, renderCtx.scene);
 
     const status = stationCtrl.update(state.distance, state.velocity, frameDt);

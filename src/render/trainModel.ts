@@ -45,7 +45,20 @@ const MAT = {
   tail: new THREE.MeshBasicMaterial({ color: L.taillight }),
 };
 
-const HUB_GEO = new THREE.CylinderGeometry(0.16, 0.16, 0.2, 10);
+// Wheel/axle/hub geometries are baked onto the X axis at build time, so the
+// mesh carries no static rotation and rolling is simply mesh.rotation.x.
+const WHEEL_R = 0.42;
+const bake = (make: () => THREE.BufferGeometry) => {
+  const g = make();
+  g.rotateZ(Math.PI / 2);
+  return g;
+};
+const WHEEL_GEO = bake(() => new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, 0.18, 14));
+const AXLE_GEO = bake(() => new THREE.CylinderGeometry(0.1, 0.1, 2.0, 8));
+const HUB_GEO = bake(() => new THREE.CylinderGeometry(0.16, 0.16, 0.2, 10));
+// crossed spokes on the outer wheel face make the roll speed readable
+const SPOKE_A_GEO = new THREE.BoxGeometry(0.06, 0.68, 0.12);
+const SPOKE_B_GEO = new THREE.BoxGeometry(0.06, 0.12, 0.68);
 
 // small BoxGeometry cache so repeated parts share vertex data
 const boxCache = new Map<string, THREE.BoxGeometry>();
@@ -299,6 +312,44 @@ function pantograph(dir: number): THREE.Group {
   return g;
 }
 
+// One powered-bogie layout: side frames, centre bolster, two axles with a wheel
+// pair on each. Wheels spin with track speed via updateTrainWheels.
+function axleWheel(side: number, z: number): THREE.Mesh {
+  const wheel = new THREE.Mesh(WHEEL_GEO, MAT.wheel);
+  // wheels sit on the railhead, not floating outside it: track gauge ±0.7175
+  wheel.position.set(side * 0.81, WHEEL_R, z);
+  wheel.userData.isWheel = true;
+  const faceX = side * 0.095;
+  for (const geo of [SPOKE_A_GEO, SPOKE_B_GEO]) {
+    const spoke = new THREE.Mesh(geo, MAT.metal);
+    spoke.position.set(faceX, 0, 0);
+    wheel.add(spoke);
+  }
+  const hub = new THREE.Mesh(HUB_GEO, MAT.metal);
+  hub.position.set(faceX, 0, 0);
+  wheel.add(hub);
+  return wheel;
+}
+
+function bogie(): THREE.Group {
+  const g = new THREE.Group();
+  for (const side of [-1, 1]) {
+    const frame = box(0.25, 0.3, 2.7, MAT.skirt);
+    frame.position.set(side * 1.02, 0.74, 0);
+    g.add(frame);
+  }
+  const bolster = box(1.6, 0.28, 0.55, MAT.skirt);
+  bolster.position.set(0, 0.82, 0);
+  g.add(bolster);
+  for (const az of [-0.85, 0.85]) {
+    const axle = new THREE.Mesh(AXLE_GEO, MAT.skirt);
+    axle.position.set(0, WHEEL_R, az);
+    g.add(axle);
+    for (const side of [-1, 1]) g.add(axleWheel(side, az));
+  }
+  return g;
+}
+
 // One car centred on the origin, length along Z (-HALF..+HALF). Cab ends taper;
 // the middle of the consist uses the full plain section so all cars share one
 // of at most three body geometries.
@@ -361,25 +412,9 @@ function car(frontCab: boolean, rearCab: boolean): THREE.Group {
   g.add(skirt);
 
   for (const bz of [-TRAIN_CONFIG.bogieOffset, TRAIN_CONFIG.bogieOffset]) {
-    const bogie = box(1.9, 0.5, 2.4, MAT.skirt);
-    bogie.position.set(0, 0.62, bz);
-    g.add(bogie);
-    for (const side of [-1, 1]) {
-      for (const wz of [bz - 0.85, bz + 0.85]) {
-        const wheel = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.42, 0.42, 0.18, 14),
-          MAT.wheel,
-        );
-        wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(side * 1.05, 0.42, wz);
-        g.add(wheel);
-        // bright hub face so the wheel reads as metal, not a flat disc
-        const hub = new THREE.Mesh(HUB_GEO, MAT.metal);
-        hub.rotation.z = Math.PI / 2;
-        hub.position.copy(wheel.position);
-        g.add(hub);
-      }
-    }
+    const b = bogie();
+    b.position.z = bz;
+    g.add(b);
   }
 
   if (frontCab) g.add(cab(1));
@@ -388,6 +423,20 @@ function car(frontCab: boolean, rearCab: boolean): THREE.Group {
 }
 
 export type DoorRef = { mesh: THREE.Object3D; side: 1 | -1; rest: number };
+
+// Inter-car coupler shoe + air hoses sitting under the gangway bellows.
+function betweenCarConnector(z: number): THREE.Group {
+  const g = new THREE.Group();
+  const shoe = box(0.4, 0.3, TRAIN_CONFIG.carGap + 0.3, MAT.skirt);
+  shoe.position.set(0, 0.8, z);
+  g.add(shoe);
+  for (const x of [-0.45, 0.45]) {
+    const hose = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.0, 8), MAT.skirt);
+    hose.position.set(x, 0.95, z);
+    g.add(hose);
+  }
+  return g;
+}
 
 export function createTrainModel(): THREE.Group {
   const train = new THREE.Group();
@@ -403,17 +452,34 @@ export function createTrainModel(): THREE.Group {
       const gangway = box(1.7, 2.3, TRAIN_CONFIG.carGap + 0.4, MAT.skirt);
       gangway.position.set(0, 2.2, z);
       train.add(gangway);
+      train.add(betweenCarConnector(z));
     }
   }
 
   const doors: DoorRef[] = [];
+  const wheels: THREE.Object3D[] = [];
   train.traverse((o) => {
     const door = o.userData.door as { side: 1 | -1; rest: number } | undefined;
     if (door) doors.push({ mesh: o, ...door });
+    if ((o.userData as { isWheel?: boolean }).isWheel) wheels.push(o);
   });
   train.userData.doors = doors;
+  train.userData.wheels = wheels;
+
+  // dev handle for browser-side inspection
+  (globalThis as unknown as { RAIL_TRAIN?: THREE.Group }).RAIL_TRAIN = train;
 
   return train;
+}
+
+// Rolling-stock motion: wheels spin with the ground speed, ω = v/r. All axles
+// share one integrated angle. dt comes from the render loop in scene.ts.
+export function updateTrainWheels(train: THREE.Group, velocity: number, dt: number) {
+  const wheels = train.userData.wheels as THREE.Object3D[] | undefined;
+  if (!wheels || wheels.length === 0 || dt <= 0) return;
+  const a = ((train.userData.wheelAngle as number) ?? 0) + (velocity / WHEEL_R) * dt;
+  train.userData.wheelAngle = a;
+  for (const w of wheels) w.rotation.x = a;
 }
 
 const DOOR_SLIDE = 1.35; // panel width: slides fully clear of the 1.3m doorway

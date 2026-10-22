@@ -4,7 +4,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { Vec3 } from "../core/types";
-import { createTrainModel, TRAIN_LENGTH } from "./trainModel";
+import { createTrainModel, TRAIN_LENGTH, updateTrainWheels } from "./trainModel";
 import { setOutlineResolution, SKY_HORIZON } from "./animestyle";
 import { updateSway } from "./scenery";
 
@@ -17,7 +17,7 @@ export type RenderContext = {
   train: THREE.Group;
   cameraMode: CameraMode;
   setCameraMode: (m: CameraMode) => void;
-  updateTrain: (pos: Vec3, tangent: Vec3) => void;
+  updateTrain: (pos: Vec3, tangent: Vec3, velocity?: number) => void;
   render: () => void;
 };
 
@@ -218,7 +218,12 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
     renderState.cameraMode = m;
   }
 
-  function updateTrain(pos: Vec3, tangent: Vec3) {
+  let lastWheelT = 0;
+  function updateTrain(pos: Vec3, tangent: Vec3, velocity = 0) {
+    const now = clock.getElapsedTime();
+    const wdt = Math.max(0, Math.min(0.1, now - lastWheelT));
+    lastWheelT = now;
+    updateTrainWheels(train, velocity, wdt);
     train.position.set(pos.x, pos.y + 0.22, pos.z);
     if (tangent.x !== 0 || tangent.z !== 0) {
       train.rotation.y = Math.atan2(tangent.x, tangent.z);
