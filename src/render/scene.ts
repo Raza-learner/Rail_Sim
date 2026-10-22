@@ -5,7 +5,7 @@ import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { Vec3 } from "../core/types";
 import { createTrainModel, TRAIN_LENGTH } from "./trainModel";
-import { setOutlineResolution } from "./animestyle";
+import { setOutlineResolution, SKY_HORIZON } from "./animestyle";
 import { updateSway } from "./scenery";
 
 export type CameraMode = "follow" | "cab";
@@ -23,9 +23,9 @@ export type RenderContext = {
 
 export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xe9f3f8);
+  scene.background = new THREE.Color(SKY_HORIZON);
   // fog matches the sky horizon so distant terrain melts into the backdrop
-  scene.fog = new THREE.Fog(0xe9f3f8, 1600, 7000);
+  scene.fog = new THREE.Fog(SKY_HORIZON, 1600, 7000);
 
   const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 8000);
   camera.position.set(0, 8, -15);

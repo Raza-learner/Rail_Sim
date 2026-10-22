@@ -5,6 +5,9 @@ import { positionAt, tangentAt } from "../core/rail";
 import { heightAt, distanceToTrack } from "./terrain";
 import type { AABB } from "../core/player";
 
+// tunable: corridor-grass instance budget multiplier (1 = ~12k tufts)
+export const GRASS_DENSITY = 1;
+
 function rightOf(t: { x: number; z: number }) {
   const len = Math.hypot(t.x, t.z) || 1;
   return { x: t.z / len, z: -t.x / len };
@@ -576,25 +579,40 @@ export function planScatter(path: RailPath): Scatter {
     }
   }
 
-  // grass tufts beside the line (9-55 m) so the corridor cut reads as rough
-  // meadow out to where trees take over, not just right beside the rails
+  // corridor meadow: instanced crossed-plane tufts with the shared vertex
+  // sway. Marched along the line with a lateral step that widens with
+  // distance: thick beside the rails (a tuft per ~4 m² at 9 m), thinning to a
+  // light scatter by 260 m. Streaming tiles render only tufts near the
+  // camera; one InstancedMesh per tile per material keeps draw calls low.
   const grass: FloraItem[] = [];
   const GRASS_COLORS = [0x7fae5a, 0x8fbc62, 0x74a352, 0x9bc46a];
-  for (let i = 0; i < 9000 && grass.length < 4800; i++) {
-    const x = (rand() - 0.5) * 340;
-    const z = rand() * 3600;
-    const d = distanceToTrack(path, x, z);
-    if (d < 9 || d > 55) continue;
-    const y = heightAt(path, x, z);
-    if (y < -0.5) continue;
-    grass.push({
-      x,
-      y,
-      z,
-      s: 1.2 + rand() * 1.2,
-      yaw: rand() * Math.PI,
-      c: Math.floor(rand() * GRASS_COLORS.length),
-    });
+  const grassCap = Math.floor(160000 * GRASS_DENSITY);
+  const rowStep = 2.0 / GRASS_DENSITY; // line-metres between rows
+  const step = (lat: number) => (1.8 + lat * 0.06) / GRASS_DENSITY; // lateral gap
+  const townP = positionAt(path, TOWN_S);
+  for (let s = 0; s < path.totalLength && grass.length < grassCap; s += rowStep) {
+    const p = positionAt(path, s);
+    const t = tangentAt(path, s);
+    const r = rightOf(t);
+    for (const side of [-1, 1]) {
+      for (let lat = 9 + rand() * 2; lat < 260 && grass.length < grassCap; lat += step(lat) * (0.7 + rand() * 0.6)) {
+        const a = (rand() - 0.5) * rowStep;
+        const x = p.x + r.x * side * lat + t.x * a;
+        const z = p.z + r.z * side * lat + t.z * a;
+        if (Math.hypot(x - townP.x, z - townP.z) < TOWN_CLEAR_RADIUS) continue;
+        // the march already knows the lateral distance; skip re-measuring it
+        const y = heightAt(path, x, z, lat);
+        if (y < -0.5) continue;
+        grass.push({
+          x,
+          y,
+          z,
+          s: 1.3 + rand() * 1.5,
+          yaw: rand() * Math.PI,
+          c: Math.floor(rand() * GRASS_COLORS.length),
+        });
+      }
+    }
   }
 
   return { trees, houses, paddies, flowers, grass };

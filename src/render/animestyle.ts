@@ -122,13 +122,17 @@ export function addOutlines(root: THREE.Object3D) {
   }
 }
 
+// horizon colour shared by the sky gradient, the scene background and the fog
+// so distant ground melts into the backdrop with no seam
+export const SKY_HORIZON = 0xe9f3f8;
+
 export function addSky(scene: THREE.Scene) {
   const geo = new THREE.SphereGeometry(4000, 32, 20);
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  // deep azure zenith melting to a pale warm horizon (must match scene.fog)
+  // deep azure zenith melting to a pale warm horizon
   const top = new THREE.Color(0x1e83dc);
   const mid = new THREE.Color(0x5fb0ec);
-  const bottom = new THREE.Color(0xe9f3f8);
+  const bottom = new THREE.Color(SKY_HORIZON);
   const col = new THREE.Color();
   const colors = new Float32Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {

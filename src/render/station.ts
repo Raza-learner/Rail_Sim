@@ -378,7 +378,8 @@ function addRibbon(
   scene.add(new THREE.Mesh(geo, mat));
 }
 
-// gravel with grass-fringe edges so the bed melts into the meadow
+// gravel with grass-fringe edges so the bed melts into the meadow: gravel
+// spills past the bed edge and weeds colonise the margins
 let ballastTex: THREE.Texture | null = null;
 function ballastTexture(): THREE.Texture {
   if (!ballastTex) {
@@ -399,11 +400,30 @@ function ballastTexture(): THREE.Texture {
       const x = i * 18 + rand() * 6;
       ctx.fillRect(x, 18 + rand() * 8, 16, 256 - 36 - rand() * 8);
     }
+    // gravel spill + green regrowth dithering the bed edges: grey specks
+    // scatter outward (fading with distance from the bed), green specks
+    // nibble inward
+    for (let i = 0; i < 450; i++) {
+      const out = 4 + rand() * 30;
+      ctx.globalAlpha = 0.5 * (1 - out / 34);
+      ctx.fillStyle = rand() < 0.5 ? "rgba(183,179,167,1)" : "rgba(160,155,140,1)";
+      const x = rand() * 252;
+      ctx.fillRect(x, 34 - out, 2 + rand() * 3, 2 + rand() * 2);
+      ctx.fillRect(252 - x, 222 + out, 2 + rand() * 3, 2 + rand() * 2);
+    }
+    ctx.globalAlpha = 1;
     // speckle
     for (let i = 0; i < 900; i++) {
       const y = 40 + rand() * 176;
       ctx.fillStyle = rand() > 0.5 ? "rgba(62,60,56,0.5)" : "rgba(226,222,212,0.55)";
       ctx.fillRect(rand() * 256, y, 2 + rand() * 2.5, 2);
+    }
+    // weeds: small green tufts colonising the bed, biased to the margins
+    for (let i = 0; i < 160; i++) {
+      const edge = rand() * 60;
+      const y = rand() < 0.5 ? 24 + edge : 232 - edge;
+      ctx.fillStyle = rand() < 0.5 ? "rgba(76,122,60,0.8)" : "rgba(95,143,74,0.7)";
+      ctx.fillRect(rand() * 252, y, 2 + rand() * 2, 4 + rand() * 5);
     }
     // faint sleeper shadow bands every 0.6 m (13 per 8 m tile)
     ctx.fillStyle = "rgba(40,36,30,0.16)";
@@ -415,6 +435,47 @@ function ballastTexture(): THREE.Texture {
     ballastTex = tex;
   }
   return ballastTex;
+}
+
+// trodden-earth maintenance path beside the bed: tan dirt with wheel ruts
+// and grass fringing, so the corridor has a walking line like the refs
+let dirtTex: THREE.Texture | null = null;
+function dirtTexture(): THREE.Texture {
+  if (!dirtTex) {
+    const c = document.createElement("canvas");
+    c.width = 128;
+    c.height = 128;
+    const ctx = c.getContext("2d")!;
+    let seed = 515;
+    const rand = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    ctx.fillStyle = "#c4a878";
+    ctx.fillRect(0, 0, 128, 128);
+    // wheel ruts
+    ctx.fillStyle = "rgba(96,74,48,0.4)";
+    ctx.fillRect(26, 0, 16, 128);
+    ctx.fillRect(86, 0, 16, 128);
+    // trodden speckle
+    for (let i = 0; i < 420; i++) {
+      ctx.fillStyle =
+        rand() > 0.5 ? "rgba(80,62,40,0.4)" : "rgba(232,214,178,0.5)";
+      ctx.fillRect(rand() * 126, rand() * 126, 1.5 + rand() * 2.5, 1.5 + rand() * 2);
+    }
+    // grass fringe + weeds creeping in from both edges
+    for (let i = 0; i < 150; i++) {
+      const edge = rand() * 20;
+      ctx.fillStyle = rand() < 0.5 ? "rgba(122,168,90,0.75)" : "rgba(95,143,74,0.65)";
+      ctx.fillRect(rand() < 0.5 ? edge : 128 - edge, rand() * 126, 2 + rand() * 2, 2 + rand() * 3);
+    }
+    const tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 8;
+    dirtTex = tex;
+  }
+  return dirtTex;
 }
 
 export function buildRails(scene: THREE.Scene, path: RailPath) {
@@ -429,6 +490,9 @@ export function buildRails(scene: THREE.Scene, path: RailPath) {
   for (const off of [-gauge, gauge]) {
     addRibbon(scene, path, off, 0.14, 0.16, railMat);
   }
+  // maintenance dirt path running beside the bed (disappears under any
+  // platform or prop that crosses it, which reads as correct layering)
+  addRibbon(scene, path, 5.5, 2.6, 0.035, new THREE.MeshToonMaterial({ map: dirtTexture() }));
 
   // sleepers at fixed 0.6 m intervals along arc length, aligned to tangent
   const count = Math.floor(path.totalLength / 0.6);
