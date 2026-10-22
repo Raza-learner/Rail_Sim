@@ -1,14 +1,14 @@
 import * as THREE from "three";
 import { addClouds } from "./clouds";
 
-// 4-band gradient ramp shared by every toon material. The shadow bands are
-// blue-violet, not grey: anime shadows take color, which is what keeps large
-// lit areas (terrain, roofs) from reading as washed-out grey.
+  // 4-band greyscale ramp: bands shape the light, hue comes from the BRDF
+  // shadow-tint patch in applyToon (the sakura-crossing approach — tinting in
+  // the ramp would flatten the colour, tinting in BRDF keeps saturations).
 export const gradientMap = (() => {
   const data = new Uint8Array([
-    120, 132, 178, 255,
-    178, 184, 212, 255,
-    226, 229, 238, 255,
+    80, 80, 80, 255,
+    142, 142, 142, 255,
+    202, 202, 202, 255,
     255, 255, 255, 255,
   ]);
   const tex = new THREE.DataTexture(data, 4, 1, THREE.RGBAFormat);
@@ -18,6 +18,36 @@ export const gradientMap = (() => {
   tex.needsUpdate = true;
   return tex;
 })();
+
+// Patch the toon BRDF (`lights_toon_pars_fragment`) so darker bands tilt
+// toward a cool violet instead of the surface just going darker — the hue
+// shift separating "anime cel" from "low-poly 3D". One shared uniform for
+// every material; existing onBeforeCompile hooks (flora sway, paddy water)
+// are composed with, not clobbered.
+const TOON_CHUNK = THREE.ShaderChunk["lights_toon_pars_fragment"];
+const TOON_LINE =
+  "vec3 irradiance = getGradientIrradiance( geometryNormal, directLight.direction ) * directLight.color;";
+const TOON_PATCH = `
+	vec3 celBand = getGradientIrradiance( geometryNormal, directLight.direction );
+	vec3 irradiance = celBand * mix( uShadowTint, vec3( 1.0 ), celBand ) * directLight.color;`;
+const shadowTint = { value: new THREE.Color(0x6c5f8c) };
+let shadowTintPatch: string | null = null;
+function tintShadow(mat: THREE.MeshToonMaterial): void {
+  if (mat.userData.shadowTinted) return;
+  mat.userData.shadowTinted = true;
+  if (!TOON_CHUNK || !TOON_CHUNK.includes(TOON_LINE)) return; // three changed chunk — ramp still works unpatched
+  shadowTintPatch ??=
+    "uniform vec3 uShadowTint;\n" + TOON_CHUNK.replace(TOON_LINE, TOON_PATCH);
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (shader, renderer) => {
+    prev?.(shader, renderer);
+    shader.uniforms.uShadowTint = shadowTint;
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <lights_toon_pars_fragment>",
+      shadowTintPatch!,
+    );
+  };
+}
 
 // Replace lit materials with flat cel-shaded ones.
 export function applyToon(root: THREE.Object3D) {
@@ -31,7 +61,7 @@ export function applyToon(root: THREE.Object3D) {
         m instanceof THREE.MeshPhongMaterial ||
         m instanceof THREE.MeshStandardMaterial
       ) {
-        return new THREE.MeshToonMaterial({
+        const cel = new THREE.MeshToonMaterial({
           color: m.color.clone(),
           map: m.map ?? null,
           gradientMap,
@@ -40,22 +70,35 @@ export function applyToon(root: THREE.Object3D) {
           vertexColors: m.vertexColors,
           side: m.side,
         });
+        tintShadow(cel);
+        return cel;
       }
       if (m instanceof THREE.MeshToonMaterial && !m.gradientMap) m.gradientMap = gradientMap;
+      if (m instanceof THREE.MeshToonMaterial) tintShadow(m);
       return m;
     });
     mesh.material = Array.isArray(mesh.material) ? out : out[0];
   });
 }
 
+export function setOutlineResolution(w: number, h: number) {
+  outlineMaterial.uniforms.res.value.set(w, h);
+}
+
 const outlineMaterial = new THREE.ShaderMaterial({
   side: THREE.BackSide,
-  uniforms: { thickness: { value: 0.055 } },
+  uniforms: { thickness: { value: 1.6 }, res: { value: new THREE.Vector2(1920, 1080) } },
   vertexShader: `
     uniform float thickness;
+    uniform vec2 res;
     void main() {
-      vec3 p = position + normal * thickness;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      vec3 nV = normalize(mat3(modelViewMatrix) * normal);
+      // constant-pixel offset in clip space: a world-space offset thins out
+      // with distance, a w-scaled NDC offset stays the same on screen
+      vec2 n2 = nV.xy;
+      vec2 dir = normalize(n2 + vec2(1e-6)) * step(1e-8, dot(n2, n2));
+      gl_Position.xy += dir * (2.0 * thickness / res.y) * gl_Position.w;
     }`,
   fragmentShader: `void main() { gl_FragColor = vec4(0.06, 0.06, 0.09, 1.0); }`,
 });

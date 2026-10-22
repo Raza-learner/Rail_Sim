@@ -1,11 +1,11 @@
 import * as THREE from "three";
 import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
-import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { Vec3 } from "../core/types";
 import { createTrainModel, TRAIN_LENGTH } from "./trainModel";
+import { setOutlineResolution } from "./animestyle";
 import { updateSway } from "./scenery";
 
 export type CameraMode = "follow" | "cab";
@@ -34,33 +34,95 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
   renderer.setSize(window.innerWidth, window.innerHeight);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 
-  // Saturated ambient: sky-blue from above, warm ground bounce from below, so
-  // the shadow side of objects takes colour instead of greying out.
-  const hemi = new THREE.HemisphereLight(0xa9d2ff, 0x8fae5e, 1.15);
+  // Two-light anime rig (sakura-crossing's): warm quantised key, a strong
+  // cool fill from the opposite quarter that carries the shadow side (anime
+  // shadows are coloured, not dark), a weak upward bounce for undersides,
+  // and sky/violet-grey hemisphere so nothing ever goes black.
+  const hemi = new THREE.HemisphereLight(0xc8e4f8, 0xa89bc0, 1.05);
   scene.add(hemi);
-  const dir = new THREE.DirectionalLight(0xffe8c4, 1.6);
+  const dir = new THREE.DirectionalLight(0xffe8c4, 1.75);
   dir.position.set(60, 110, 30);
   scene.add(dir);
+  const fill = new THREE.DirectionalLight(0xa9bdf5, 0.8);
+  fill.position.set(-65, 55, -35);
+  scene.add(fill);
+  const bounce = new THREE.DirectionalLight(0xd8cbe8, 0.25);
+  bounce.position.set(-15, -30, 50);
+  scene.add(bounce);
 
-  const composer = new EffectComposer(renderer);
+  // Custom composer target: the scene render leaves a depth texture we ink
+  // from. Both ping-pong buffers share one depth store (RenderPass draws into
+  // readBuffer, so the clone's own depth would otherwise miss the scene).
+  const pxr = renderer.getPixelRatio();
+  const inkDepth = new THREE.DepthTexture(window.innerWidth * pxr, window.innerHeight * pxr);
+  inkDepth.type = THREE.UnsignedIntType;
+  const composer = new EffectComposer(
+    renderer,
+    new THREE.WebGLRenderTarget(window.innerWidth * pxr, window.innerHeight * pxr, { depthTexture: inkDepth }),
+  );
+  composer.renderTarget2.depthTexture = composer.renderTarget1.depthTexture;
   composer.setSize(window.innerWidth, window.innerHeight);
+  setOutlineResolution(window.innerWidth * pxr, window.innerHeight * pxr);
   const clock = new THREE.Clock();
   composer.addPass(new RenderPass(scene, camera));
-  const bloom = new UnrealBloomPass(
-    new THREE.Vector2(window.innerWidth, window.innerHeight),
-    0.08,
-    0.7,
-    0.95,
-  );
-  composer.addPass(bloom);
+  // Screen-space ink: second difference of linearised depth. Grazing flats
+  // give ~0 so roads/fields stay clean; silhouettes and creases ink. Centre
+  // closer than its neighbours = convex edge (strong); centre behind =
+  // occlusion edge (faint). Colour-aware: the line takes the darker
+  // neighbouring colour, not black. ?ink=0 turns it off for A/B checks.
+  let ink: ShaderPass | null = null;
+  if (new URLSearchParams(location.search).get("ink") !== "0") {
+    ink = new ShaderPass({
+      uniforms: {
+        tDiffuse: { value: null },
+        tDepth: { value: composer.renderTarget1.depthTexture },
+        texel: { value: new THREE.Vector2(1 / (window.innerWidth * pxr), 1 / (window.innerHeight * pxr)) },
+        nearP: { value: camera.near },
+        farP: { value: camera.far },
+        strength: { value: 0.55 },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: `
+        uniform sampler2D tDiffuse;
+        uniform sampler2D tDepth;
+        uniform vec2 texel;
+        uniform float nearP;
+        uniform float farP;
+        uniform float strength;
+        varying vec2 vUv;
+        float lin(vec2 uv) {
+          float d = texture2D(tDepth, uv).x;
+          return (nearP * farP) / (farP - d * (farP - nearP));
+        }
+        void main() {
+          vec3 src = texture2D(tDiffuse, vUv).rgb;
+          float l = lin(vUv - vec2(texel.x, 0.0));
+          float r = lin(vUv + vec2(texel.x, 0.0));
+          float b = lin(vUv - vec2(0.0, texel.y));
+          float t = lin(vUv + vec2(0.0, texel.y));
+          float c = lin(vUv);
+          float rel = ((l + r + b + t) - 4.0 * c) / max(c, 1.0);
+          float e = max(rel, 0.0) / 0.06 + max(-rel, 0.0) / 0.30;
+          float ink = clamp(e, 0.0, 1.0) * strength * (1.0 - smoothstep(250.0, 750.0, c));
+          vec3 lineCol = min(
+            min(texture2D(tDiffuse, vUv - vec2(texel.x, 0.0)).rgb, texture2D(tDiffuse, vUv + vec2(texel.x, 0.0)).rgb),
+            min(texture2D(tDiffuse, vUv - vec2(0.0, texel.y)).rgb, texture2D(tDiffuse, vUv + vec2(0.0, texel.y)).rgb)
+          ) * 0.85;
+          gl_FragColor = vec4(mix(src, lineCol, ink), 1.0);
+        }`,
+    });
+    composer.addPass(ink);
+  }
   // Kuwahara paint: 4-quadrant least-variance smoothing that keeps edges —
-  // a light radius-2 blend for the Ghibli wash without mushing detail
-  const pr = renderer.getPixelRatio();
+  // a light blend for the Ghibli wash: tight radius so the scene reads
+  // painterly without smearing detail
   const paint = new ShaderPass({
     uniforms: {
       tDiffuse: { value: null },
-      strength: { value: 0.55 },
-      texel: { value: new THREE.Vector2(1 / (window.innerWidth * pr), 1 / (window.innerHeight * pr)) },
+      strength: { value: 0.3 },
+      texel: { value: new THREE.Vector2(1 / (window.innerWidth * pxr), 1 / (window.innerHeight * pxr)) },
     },
     vertexShader: `
       varying vec2 vUv;
@@ -81,7 +143,7 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
           float al2 = 0.0;
           for (int i = 0; i < 3; i++) {
             for (int j = 0; j < 3; j++) {
-              vec2 o = vec2(float(i) + 0.5, float(j) + 0.5) * texel * 2.0;
+              vec2 o = vec2(float(i) + 0.5, float(j) + 0.5) * texel * 1.2;
               if (q == 1 || q == 3) o.x = -o.x;
               if (q == 2 || q == 3) o.y = -o.y;
               vec3 c = texture2D(tDiffuse, vUv + o).rgb;
@@ -99,7 +161,10 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
       }`,
   });
   composer.addPass(paint);
-  const vignette = new ShaderPass({
+  // Film grade: split-tone (violet-leaning darks, warm paper-white
+  // highlights), lifted blacks so shadow never goes pure black, then the
+  // existing vignette — the finishing pass over the painted image
+  const grade = new ShaderPass({
     uniforms: { tDiffuse: { value: null }, strength: { value: 0.12 } },
     vertexShader: `
       varying vec2 vUv;
@@ -110,12 +175,16 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
       varying vec2 vUv;
       void main() {
         vec4 tex = texture2D(tDiffuse, vUv);
+        vec3 c = tex.rgb;
+        float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c *= mix(vec3(0.93, 0.86, 1.08), vec3(1.04, 1.0, 0.93), smoothstep(0.05, 0.85, l));
+        c = c * 0.97 + vec3(0.030, 0.026, 0.048);
         float d = distance(vUv, vec2(0.5));
         float v = smoothstep(0.9, 0.35, d);
-        gl_FragColor = vec4(tex.rgb * mix(1.0 - strength, 1.0, v), tex.a);
+        gl_FragColor = vec4(c * mix(1.0 - strength, 1.0, v), tex.a);
       }`,
   });
-  composer.addPass(vignette);
+  composer.addPass(grade);
   composer.addPass(new OutputPass());
 
   const train = createTrainModel();
@@ -126,6 +195,17 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
     camera.updateProjectionMatrix();
     renderer.setSize(window.innerWidth, window.innerHeight);
     composer.setSize(window.innerWidth, window.innerHeight);
+    // depth texture isn't resized by the composer — do it by hand
+    const px = renderer.getPixelRatio();
+    const dw = window.innerWidth * px;
+    const dh = window.innerHeight * px;
+    composer.renderTarget1.depthTexture!.image.width = dw;
+    composer.renderTarget1.depthTexture!.image.height = dh;
+    composer.renderTarget1.depthTexture!.needsUpdate = true;
+    if (ink) {
+      ink.uniforms.texel.value.set(1 / dw, 1 / dh);
+    }
+    setOutlineResolution(dw, dh);
     paint.uniforms.texel.value.set(
       1 / (window.innerWidth * renderer.getPixelRatio()),
       1 / (window.innerHeight * renderer.getPixelRatio()),
