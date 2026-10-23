@@ -4,10 +4,9 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { ShaderPass } from "three/examples/jsm/postprocessing/ShaderPass.js";
 import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import type { Vec3 } from "../core/types";
-import type { RailPath } from "../core/rail";
-import { createTrainModel, TRAIN_LENGTH, updateTrainWheels, updatePantographs } from "./trainModel";
+import { createTrainModel, TRAIN_LENGTH } from "./trainModel";
 import { setOutlineResolution, SKY_HORIZON } from "./animestyle";
-import { updateSway, contactWireHeight } from "./scenery";
+import { updateSway } from "./scenery";
 
 export type CameraMode = "follow" | "cab";
 
@@ -18,11 +17,11 @@ export type RenderContext = {
   train: THREE.Group;
   cameraMode: CameraMode;
   setCameraMode: (m: CameraMode) => void;
-  updateTrain: (pos: Vec3, tangent: Vec3, velocity?: number, distance?: number) => void;
+  updateTrain: (pos: Vec3, tangent: Vec3) => void;
   render: () => void;
 };
 
-export function createRender(canvas: HTMLCanvasElement, path: RailPath): RenderContext {
+export function createRender(canvas: HTMLCanvasElement): RenderContext {
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(SKY_HORIZON);
   // fog matches the sky horizon so distant terrain melts into the backdrop
@@ -225,18 +224,8 @@ export function createRender(canvas: HTMLCanvasElement, path: RailPath): RenderC
     renderState.cameraMode = m;
   }
 
-  let lastWheelT = 0;
-  function updateTrain(pos: Vec3, tangent: Vec3, velocity = 0, distance = 0) {
-    const now = clock.getElapsedTime();
-    const wdt = Math.max(0, Math.min(0.1, now - lastWheelT));
-    lastWheelT = now;
-    updateTrainWheels(train, velocity, wdt);
+  function updateTrain(pos: Vec3, tangent: Vec3) {
     train.position.set(pos.x, pos.y + 0.22, pos.z);
-    // pantographs ride the catenary: shoe Y = contact wire Y − train Y
-    updatePantographs(train, (arc) => {
-      const wireY = contactWireHeight(path, distance + arc);
-      return wireY === null ? null : wireY - train.position.y;
-    });
     if (tangent.x !== 0 || tangent.z !== 0) {
       train.rotation.y = Math.atan2(tangent.x, tangent.z);
     }

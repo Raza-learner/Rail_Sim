@@ -24,7 +24,7 @@ import * as THREE from "three";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#app")!;
 const path = buildRail(route.nodes);
-const renderCtx = createRender(canvas, path);
+const renderCtx = createRender(canvas);
 const input = new InputManager();
 const updateHud = createHud();
 const stationCtrl = new StationStopController(route);
@@ -114,7 +114,7 @@ function loop(now: number) {
     }
     const pos = positionAt(path, state.distance);
     const tan = tangentAt(path, state.distance);
-    renderCtx.updateTrain(pos, tan, state.velocity, state.distance);
+    renderCtx.updateTrain(pos, tan);
     tiles.update(pos, renderCtx.scene);
 
     const status = stationCtrl.update(state.distance, state.velocity, frameDt);

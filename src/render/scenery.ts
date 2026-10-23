@@ -168,93 +168,51 @@ function buildCrossing(scene: THREE.Scene, path: RailPath) {
   }
 }
 
-// Catenary constants shared by the wire drawing and the pantograph driver.
-const POLE_START = 10;
-const POLE_SPAN = 90;
-const POLE_LATERAL = 6.5;
-const MESSENGER_H = 8.6; // above the track plane
-const MESSENGER_SAG = 1.15;
-const CONTACT_H = 7.5; // above the track plane
-const CONTACT_SAG = 0.95;
-
 function buildPoles(scene: THREE.Scene, path: RailPath) {
   const poleMat = new THREE.MeshToonMaterial({ color: 0x6b5641 });
   const wireMat = new THREE.LineBasicMaterial({ color: 0x2a2f36 });
-  const poleS: number[] = [];
-  for (let s = POLE_START; s < path.totalLength; s += POLE_SPAN) poleS.push(s);
-  for (const s of poleS) {
+  const tops: THREE.Vector3[] = [];
+  for (let s = 40; s < path.totalLength; s += 90) {
     const p = positionAt(path, s);
     const t = tangentAt(path, s);
     const r = rightOf(t);
-    const x = p.x + r.x * POLE_LATERAL;
-    const z = p.z + r.z * POLE_LATERAL;
+    const x = p.x + r.x * 6.5;
+    const z = p.z + r.z * 6.5;
     const gy = heightAt(path, x, z);
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.24, 9, 6), poleMat);
     pole.position.set(x, gy + 4.5, z);
     scene.add(pole);
     const armYaw = Math.atan2(-r.z, r.x);
-    for (const ay of [7.6, MESSENGER_H]) {
-      // cantilever arm reaching from the pole across to above the track pair
-      const arm = new THREE.Mesh(new THREE.BoxGeometry(7.0, 0.12, 0.12), poleMat);
-      arm.position.set(p.x + r.x * (POLE_LATERAL - 3.5), gy + ay, p.z + r.z * (POLE_LATERAL - 3.5));
+    for (const ay of [7.6, 8.6]) {
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.12, 0.12), poleMat);
+      arm.position.set(x, gy + ay, z);
       arm.rotation.y = armYaw;
       scene.add(arm);
     }
+    tops.push(new THREE.Vector3(x, gy + 8.6, z));
   }
-  // contact + messenger wires run over the track centreline (not pole-to-pole
-  // beside it) so the pantograph shoe actually rides them; droppers hang the
-  // contact wire from the messenger mid-span
+  // two catenary-sagged wires per pole span, sampled in short segments so
+  // the droop reads; pole tops themselves follow the ground line
   const pts: number[] = [];
-  const steps = 10;
-  for (let i = 0; i < poleS.length; i++) {
-    const s0 = poleS[i];
-    const s1 = Math.min(s0 + POLE_SPAN, path.totalLength);
+  const steps = 8;
+  for (let i = 1; i < tops.length; i++) {
+    const a = tops[i - 1];
+    const b = tops[i];
     for (let k = 0; k < steps; k++) {
-      const sa = s0 + ((s1 - s0) * k) / steps;
-      const sb = s0 + ((s1 - s0) * (k + 1)) / steps;
-      for (const [h, sag] of [
-        [MESSENGER_H, MESSENGER_SAG],
-        [CONTACT_H, CONTACT_SAG],
-      ] as const) {
-        const pa = positionAt(path, sa);
-        const pb = positionAt(path, sb);
-        const ua = (sa - s0) / POLE_SPAN;
-        const ub = (sb - s0) / POLE_SPAN;
+      const u0 = k / steps;
+      const u1 = (k + 1) / steps;
+      // [height offset from pole top, sag amplitude]
+      for (const [h, sag] of [[0, 1.15], [-1.1, 0.95]] as const) {
         pts.push(
-          pa.x, pa.y + h - sag * 4 * ua * (1 - ua), pa.z,
-          pb.x, pb.y + h - sag * 4 * ub * (1 - ub), pb.z,
+          a.x + (b.x - a.x) * u0, a.y + (b.y - a.y) * u0 + h - sag * 4 * u0 * (1 - u0), a.z + (b.z - a.z) * u0,
+          a.x + (b.x - a.x) * u1, a.y + (b.y - a.y) * u1 + h - sag * 4 * u1 * (1 - u1), a.z + (b.z - a.z) * u1,
         );
       }
-    }
-    // droppers: messenger → contact at three points mid-span
-    for (const du of [0.25, 0.5, 0.75]) {
-      const sd = s0 + (s1 - s0) * du;
-      const pd = positionAt(path, sd);
-      pts.push(
-        pd.x, pd.y + MESSENGER_H - MESSENGER_SAG * 4 * du * (1 - du), pd.z,
-        pd.x, pd.y + CONTACT_H - CONTACT_SAG * 4 * du * (1 - du), pd.z,
-      );
     }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pts, 3));
   scene.add(new THREE.LineSegments(geo, wireMat));
-}
-
-// World-space contact-wire height at arc position s — the exact curve drawn
-// above, so the pantograph shoe can ride the wire with zero eyeballing.
-// null = past the last pole / no wire (pantograph parks folded).
-export function contactWireHeight(path: RailPath, s: number): number | null {
-  if (s > path.totalLength) return null;
-  const lastPole = POLE_START + Math.floor((path.totalLength - POLE_START) / POLE_SPAN) * POLE_SPAN;
-  if (s > lastPole) return null;
-  if (s < POLE_START) return positionAt(path, POLE_START).y + CONTACT_H;
-  const s0 = POLE_START + Math.floor((s - POLE_START) / POLE_SPAN) * POLE_SPAN;
-  const s1 = s0 + POLE_SPAN;
-  const u = (s - s0) / POLE_SPAN;
-  const y0 = positionAt(path, s0).y;
-  const y1 = positionAt(path, s1).y;
-  return y0 + (y1 - y0) * u + CONTACT_H - CONTACT_SAG * 4 * u * (1 - u);
 }
 
 function buildHills(scene: THREE.Scene, path: RailPath) {
@@ -374,6 +332,28 @@ export const GABLE = (() => {
   return g;
 })();
 
+// hipped roof, same scale contract as GABLE (unit footprint, apex at y=1,
+// ridge along local z spanning the middle half) — the squared-off Japanese
+// style so not every house is a western gable
+const HIP = (() => {
+  const k = 0.25;
+  const quad = (a: number[], b: number[], c: number[], d: number[]) => [
+    ...a, ...b, ...c,
+    ...a, ...c, ...d,
+  ];
+  const tri = (a: number[], b: number[], c: number[]) => [...a, ...b, ...c];
+  const v = [
+    ...quad([0, 1, -k], [0.5, 0, -0.5], [0.5, 0, 0.5], [0, 1, k]), // slope +X
+    ...quad([0, 1, k], [-0.5, 0, 0.5], [-0.5, 0, -0.5], [0, 1, -k]), // slope -X
+    ...tri([0, 1, k], [0.5, 0, 0.5], [-0.5, 0, 0.5]), // hip end +Z
+    ...tri([0, 1, -k], [-0.5, 0, -0.5], [0.5, 0, -0.5]), // hip end -Z
+  ];
+  const g = new THREE.BufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(v, 3));
+  g.computeVertexNormals();
+  return g;
+})();
+
 // long face gives houses readable fronts, lazily built: module tests run in
 // node without DOM.
 // Shop boards: white field, coloured frame matching the awning, one big trade
@@ -413,51 +393,175 @@ function shopSignMaterial(i: number): THREE.MeshBasicMaterial {
   return mat;
 }
 
-let facadeMat: THREE.MeshBasicMaterial | null = null;
-function facadeMaterial(): THREE.MeshBasicMaterial {
-  if (!facadeMat) {
-    const c = document.createElement("canvas");
-    c.width = 128;
-    c.height = 64;
-    const ctx = c.getContext("2d")!;
+let facadeMats: Map<number, THREE.MeshBasicMaterial> | null = null;
+// Three facade variants (door/window layouts) so neighbouring houses don't
+// share a face; canvas 128×64, door+windows cut out with alpha, like before.
+function facadeMaterial(v: number): THREE.MeshBasicMaterial {
+  if (!facadeMats) facadeMats = new Map();
+  let mat = facadeMats.get(v);
+  if (mat) return mat;
+  const c = document.createElement("canvas");
+  c.width = 128;
+  c.height = 64;
+  const ctx = c.getContext("2d")!;
+  if (v === 1) {
+    // mailbox door centre-left, small transom, mullioned warm panes right
+    ctx.fillStyle = "#242b36";
+    ctx.fillRect(16, 28, 20, 36);
+    ctx.fillStyle = "#e9d9a6";
+    ctx.fillRect(52, 20, 20, 18);
+    ctx.fillRect(88, 20, 20, 18);
+    ctx.fillStyle = "#3a3f47";
+    ctx.fillRect(60, 20, 4, 18); // mullions
+    ctx.fillRect(96, 27, 6, 4);
+  } else if (v === 2) {
+    // sliding-door shed: full-height door at the edge, one small window
+    ctx.fillStyle = "#3a3f47";
+    ctx.fillRect(92, 6, 28, 58);
+    ctx.fillStyle = "#242b36";
+    ctx.fillRect(2, 14, 22, 22);
+  } else {
     ctx.fillStyle = "#242b36";
     ctx.fillRect(52, 22, 24, 42); // door
     ctx.fillRect(10, 18, 26, 22); // window
     ctx.fillRect(92, 18, 26, 22); // window
-    const tex = new THREE.CanvasTexture(c);
-    tex.colorSpace = THREE.SRGBColorSpace;
-    facadeMat = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5 });
   }
-  return facadeMat;
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  mat = new THREE.MeshBasicMaterial({ map: tex, alphaTest: 0.5 });
+  facadeMats.set(v, mat);
+  return mat;
+}
+
+let wallMats: Map<string, THREE.MeshToonMaterial> | null = null;
+// Wall panels over the palette colour: white-based canvases multiply onto the
+// toon tint — plaster mottle, horizontal planks, half-timber. Deterministic
+// pattern per variant (fixed LCG seed) so the village looks the same every run.
+function wallMaterial(v: number, color: number): THREE.MeshToonMaterial {
+  if (!wallMats) wallMats = new Map();
+  const key = `${v}-${color.toString(16)}`;
+  let mat = wallMats.get(key);
+  if (mat) return mat;
+  const c = document.createElement("canvas");
+  c.width = c.height = 128;
+  const ctx = c.getContext("2d")!;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, 128, 128);
+  let seed = v * 137 + 41;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff);
+  if (v === 1) {
+    // horizontal weather planks: tone bands + darker joint shadows
+    for (let y = 0; y < 128; y += 16) {
+      ctx.fillStyle = `rgba(120,95,70,${0.06 + rnd() * 0.07})`;
+      ctx.fillRect(0, y, 128, 16);
+      ctx.fillStyle = "rgba(70,52,38,0.4)";
+      ctx.fillRect(0, y + 14, 128, 2);
+      // staggered nail/blotch
+      ctx.fillStyle = "rgba(90,70,50,0.25)";
+      ctx.fillRect(rnd() * 120, y + 7, 3, 2);
+    }
+  } else if (v === 2) {
+    // half-timber frame: dark beams at edges, mid studs and one diagonal
+    ctx.fillStyle = "rgba(58,44,32,0.75)";
+    ctx.fillRect(0, 0, 128, 6);
+    ctx.fillRect(0, 122, 128, 6);
+    ctx.fillRect(0, 0, 6, 128);
+    ctx.fillRect(122, 0, 6, 128);
+    ctx.fillRect(60, 0, 8, 128);
+    ctx.fillRect(0, 60, 128, 6);
+    ctx.beginPath();
+    ctx.strokeStyle = "rgba(58,44,32,0.6)";
+    ctx.lineWidth = 7;
+    ctx.moveTo(6, 122);
+    ctx.lineTo(60, 66);
+    ctx.stroke();
+  } else {
+    // plaster: soft mottling blotches
+    for (let n = 0; n < 220; n++) {
+      ctx.fillStyle = `rgba(125,105,82,${0.05 + rnd() * 0.08})`;
+      ctx.fillRect(rnd() * 126, rnd() * 126, 3 + rnd() * 5, 3 + rnd() * 5);
+    }
+  }
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(2, 1);
+  mat = new THREE.MeshToonMaterial({ color, map: tex });
+  wallMats.set(key, mat);
+  return mat;
 }
 
 export function makeHouse(w: number, d: number, h: number, i: number, shop?: 1 | -1): THREE.Group {
   const house = new THREE.Group();
   // warmed wall palette: cream, sand, oat and two persimmon-toned houses so
   // the village reads warm under toon shading instead of grey
+  const wallCol = [0xf1e3cd, 0xead0b8, 0xe0d5c5, 0xf0dcc8, 0xe4c9ae, 0xd98f6e][i % 6];
+  // wall panels cycle plaster → planks → half-timber; facade layout varies
+  // independently so neighbours differ on both counts
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(w, h, d),
-    new THREE.MeshToonMaterial({ color: [0xf1e3cd, 0xead0b8, 0xe0d5c5, 0xf0dcc8, 0xe4c9ae, 0xd98f6e][i % 6] }),
+    wallMaterial(i % 3, wallCol),
   );
   body.position.y = h / 2;
   house.add(body);
 
-  // gable roof, ridge along the longer axis, eaves overhanging
+  // dark base skirt grounds the box against the grass
+  const skirt = new THREE.Mesh(
+    new THREE.BoxGeometry(w + 0.08, 0.34, d + 0.08),
+    new THREE.MeshToonMaterial({ color: 0x5a5248 }),
+  );
+  skirt.position.y = 0.16;
+  house.add(skirt);
+
+  // gable or hipped roof, ridge along the longer axis, eaves overhanging;
+  // per-house roof rise and a rotated colour pick so rooflines vary
   const longX = w >= d;
+  const hip = i % 4 === 1; // every 4th house wears the squared-off hip
+  const pitch = 1.15 + (i % 5) * 0.12;
   const roof = new THREE.Mesh(
-    GABLE,
+    hip ? HIP : GABLE,
     new THREE.MeshToonMaterial({ color: [0x6a6f78, 0x8a4b3a, 0x4a5a6a, 0x555f6a][i % 4] }),
   );
   roof.rotation.y = longX ? Math.PI / 2 : 0;
-  roof.scale.set(longX ? d * 1.15 : w * 1.15, 1.3, longX ? w * 1.15 : d * 1.15);
+  roof.scale.set(longX ? d * 1.15 : w * 1.15, pitch, longX ? w * 1.15 : d * 1.15);
   roof.position.y = h - 0.02;
   house.add(roof);
 
-  // facade planes on the two long faces
+  // roof dressing: ridge cap on the apex, fascia boards under the long eaves —
+  // all from one shared unit cube, scaled per house
+  const eaveLong = (longX ? w : d) * 1.15;
+  const eaveShort = (longX ? d : w) * 1.15; // cross-axis span of the overhang
+  const cap = new THREE.Mesh(
+    new THREE.BoxGeometry(0.13, 0.1, 1),
+    new THREE.MeshToonMaterial({ color: [0x4b5058, 0x6b4434, 0x3e4854, 0x474f58][i % 4] }),
+  );
+  cap.scale.z = hip ? eaveLong * 0.5 : eaveLong;
+  cap.rotation.y = longX ? Math.PI / 2 : 0;
+  cap.position.y = h - 0.02 + pitch + 0.02;
+  house.add(cap);
+  for (const s of [-1, 1]) {
+    const f = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.1, 1),
+      new THREE.MeshToonMaterial({ color: 0x4e4640 }),
+    );
+    // slab runs along the long axis, sits at the cross-axis eaves edge
+    f.scale.z = eaveLong + 0.04;
+    f.rotation.y = longX ? Math.PI / 2 : 0;
+    f.position.set(
+      longX ? 0 : s * eaveShort / 2,
+      h - 0.02 + 0.03,
+      longX ? s * eaveShort / 2 : 0,
+    );
+    house.add(f);
+  }
+
+  // facade planes on the two long faces — layout variant follows the house
+  // index offset from the wall variant so the pairings don't correlate
   const span = longX ? w : d;
   const rys = longX ? [0, Math.PI] : [Math.PI / 2, -Math.PI / 2];
+  const facadeV = (i * 2 + 1) % 3;
   for (let k = 0; k < 2; k++) {
-    const f = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), facadeMaterial());
+    const f = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), facadeMaterial(facadeV));
     f.name = "facade";
     f.rotation.y = rys[k];
     f.scale.set(span * 0.88, h * 0.85, 1);
