@@ -185,6 +185,11 @@ export function createRender(canvas: HTMLCanvasElement): RenderContext {
         float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
         c *= mix(vec3(0.93, 0.86, 1.08), vec3(1.04, 1.0, 0.93), smoothstep(0.05, 0.85, l));
         c = c * 0.97 + vec3(0.030, 0.026, 0.048);
+        // summer grade (Shiro & Coal Town): expand chroma hard and push
+        // mid-tone greens toward emerald so foliage stays vivid
+        float l2 = dot(c, vec3(0.2126, 0.7152, 0.0722));
+        c = mix(vec3(l2), c, 1.24);
+        c.g = max(c.g, l2 + (c.g - l2) * (1.0 + 0.5 * smoothstep(0.12, 0.55, l2) * (1.0 - smoothstep(0.7, 0.95, l2))));
         float d = distance(vUv, vec2(0.5));
         float v = smoothstep(0.9, 0.35, d);
         gl_FragColor = vec4(c * mix(1.0 - strength, 1.0, v), tex.a);

@@ -451,7 +451,7 @@ function dirtTexture(): THREE.Texture {
       seed = (seed * 1103515245 + 12345) & 0x7fffffff;
       return seed / 0x7fffffff;
     };
-    ctx.fillStyle = "#c4a878";
+    ctx.fillStyle = "#d3bb8e";
     ctx.fillRect(0, 0, 128, 128);
     // wheel ruts
     ctx.fillStyle = "rgba(96,74,48,0.4)";

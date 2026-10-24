@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import type { RailPath } from "../core/rail";
 import { positionAt, tangentAt } from "../core/rail";
-import { heightAt, distanceToTrack } from "./terrain";
+import { heightAt, distanceToTrack, meshHeightAt } from "./terrain";
 import type { AABB } from "../core/player";
 
 // tunable: corridor-grass instance budget multiplier (1 = ~12k tufts)
@@ -687,8 +687,14 @@ export function planScatter(path: RailPath): Scatter {
     const off = 40 + (i % 3) * 12;
     const x = p.x + r.x * off * side;
     const z = p.z + r.z * off * side;
-    paddies.push({ x, y: heightAt(path, x, z) + 0.06, z, yaw: Math.atan2(t.x, t.z) });
+    // y from the sheet's actual GPU interpolation — exact heightAt sits
+    // under the mesh's ~0.5m corridor-edge bulge and buries the water
+    paddies.push({ x, y: meshHeightAt(path, x, z) + 0.08, z, yaw: Math.atan2(t.x, t.z) });
   }
+  // flooded plots grow only the sown seedlings — keep meadow flora out
+  const inPaddy = (x: number, z: number) =>
+    paddies.some((p) => (x - p.x) * (x - p.x) + (z - p.z) * (z - p.z) < 188); // ~13.7m half-diagonal of the 22x16 plot
+  for (let i = trees.length - 1; i >= 0; i--) if (inPaddy(trees[i].x, trees[i].z)) trees.splice(i, 1);
 
   // flower clusters in the corridor band, clumped like poppy drifts, not
   // uniform noise — concentrated where the follow camera actually sees them
@@ -709,7 +715,9 @@ export function planScatter(path: RailPath): Scatter {
       const x = cx + Math.cos(a) * rr;
       const z = cz + Math.sin(a) * rr;
       if (heightAt(path, x, z) < -0.5) continue;
+      if (inPaddy(x, z)) continue;
       // anchored to the cluster colour half the time, mixed otherwise, so
+      // drifts have an identity without becoming monochrome
       // drifts have an identity without becoming monochrome
       const mixed = flowerRand() > 0.5;
       flowers.push({
@@ -731,7 +739,7 @@ export function planScatter(path: RailPath): Scatter {
   // light scatter by 260 m. Streaming tiles render only tufts near the
   // camera; one InstancedMesh per tile per material keeps draw calls low.
   const grass: FloraItem[] = [];
-  const GRASS_COLORS = [0x7fae5a, 0x8fbc62, 0x74a352, 0x9bc46a];
+  const GRASS_COLORS = [0x66b245, 0x7ec454, 0x57a13c, 0x92cc63];
   const grassCap = Math.floor(160000 * GRASS_DENSITY);
   const rowStep = 2.0 / GRASS_DENSITY; // line-metres between rows
   const step = (lat: number) => (1.8 + lat * 0.06) / GRASS_DENSITY; // lateral gap
@@ -746,6 +754,7 @@ export function planScatter(path: RailPath): Scatter {
         const x = p.x + r.x * side * lat + t.x * a;
         const z = p.z + r.z * side * lat + t.z * a;
         if (Math.hypot(x - townP.x, z - townP.z) < TOWN_CLEAR_RADIUS) continue;
+        if (inPaddy(x, z)) continue;
         // the march already knows the lateral distance; skip re-measuring it
         const y = heightAt(path, x, z, lat);
         if (y < -0.5) continue;
@@ -867,7 +876,7 @@ function crossedPlanes(): THREE.BufferGeometry {
 const FLORA_GEO = crossedPlanes();
 
 const FLORA_COLORS = [0xe2534a, 0xf08a3c, 0xef8aa4, 0xf5f2ea, 0xf2c94c, 0x9a7ad6];
-const GRASS_COLORS = [0x7fae5a, 0x8fbc62, 0x74a352, 0x9bc46a];
+const GRASS_COLORS = [0x66b245, 0x7ec454, 0x57a13c, 0x92cc63];
 
 // wind sway: a shared time uniform injected into the flora vertex shader.
 // Phase comes from the instance's world offset, so each tuft moves
@@ -970,18 +979,19 @@ function paddyRiceMaterial(): THREE.MeshToonMaterial {
     c.width = 128;
     c.height = 96;
     const ctx = c.getContext("2d")!;
-    // flooded water base, light enough to catch the sky
-    ctx.fillStyle = "#9dc6e4";
+    // flooded water base, light enough to catch the sky; sparse seedling
+    // rows so open water dominates the plot like the refs
+    ctx.fillStyle = "#aed2e8";
     ctx.fillRect(0, 0, 128, 96);
     ctx.fillStyle = "rgba(255,255,255,0.45)";
     ctx.fillRect(8, 12, 112, 6);
     ctx.fillRect(20, 30, 96, 3);
-    // rice seedling rows
+    // rice seedling rows — thin, open water between
     ctx.fillStyle = "#5e8f3e";
-    for (let y = 14; y < 96; y += 16) {
-      ctx.fillRect(0, y, 128, 9);
-      ctx.fillStyle = "#75a94a";
-      ctx.fillRect(0, y + 5, 128, 3);
+    for (let y = 14; y < 96; y += 20) {
+      ctx.fillRect(0, y, 128, 6);
+      ctx.fillStyle = "#7fb551";
+      ctx.fillRect(0, y + 4, 128, 2);
       ctx.fillStyle = "#5e8f3e";
     }
     const tex = new THREE.CanvasTexture(c);
@@ -1007,7 +1017,7 @@ function paddyRiceMaterial(): THREE.MeshToonMaterial {
             float fr = pow(1.0 - clamp(-dir.y, 0.0, 1.0), 2.2);
             vec3 r = vec3(dir.x, -dir.y, dir.z);
             vec3 sky = mix(vec3(0.914, 0.953, 0.973), vec3(0.373, 0.690, 0.925), clamp(r.y * 1.3, 0.0, 1.0));
-            diffuseColor.rgb = mix(diffuseColor.rgb, sky, clamp(fr, 0.0, 0.7));
+            diffuseColor.rgb = mix(diffuseColor.rgb, sky, clamp(fr, 0.0, 0.85));
           }`,
         );
     };
@@ -1053,7 +1063,8 @@ export function buildTileScenery(scatter: Scatter): THREE.Group {
     const plane = new THREE.Mesh(new THREE.PlaneGeometry(22, 16), paddyRiceMaterial());
     plane.rotation.x = -Math.PI / 2;
     pg.add(plane);
-    const bankMat = new THREE.MeshToonMaterial({ color: 0x5a7d40 });
+    // banks read as pale earthen ridges between flooded plots, like the refs
+    const bankMat = new THREE.MeshToonMaterial({ color: 0xb49c6a });
     for (const bx of [-11, 11]) {
       const bank = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.45, 16), bankMat);
       bank.position.set(bx, 0.12, 0);

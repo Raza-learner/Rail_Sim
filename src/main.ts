@@ -23,8 +23,10 @@ import { TileManager } from "./world/tiles";
 import * as THREE from "three";
 
 const canvas = document.querySelector<HTMLCanvasElement>("#app")!;
+console.log("MAIN INIT", (window as unknown as { __initCount?: number }).__initCount = ((window as unknown as { __initCount?: number }).__initCount || 0) + 1);
 const path = buildRail(route.nodes);
 const renderCtx = createRender(canvas);
+(window as unknown as { __rc: unknown }).__rc = renderCtx; // TEMP probe
 const input = new InputManager();
 const updateHud = createHud();
 const stationCtrl = new StationStopController(route);

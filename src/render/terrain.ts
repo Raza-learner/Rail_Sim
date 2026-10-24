@@ -75,6 +75,33 @@ export function heightAt(path: RailPath, x: number, z: number, knownDist?: numbe
   return h;
 }
 
+// The meadow sheet is one 7200x7200 plane on a 220x220 grid, so the GPU
+// linearly interpolates heightAt between nodes ~32 m apart and sits ABOVE
+// the exact value near the corridor edge (up to ~0.5 m). Scatter placed on
+// exact heightAt gets buried; this returns the height the sheet renders.
+const SHEET_SIZE = 7200;
+const SHEET_SEG = 220;
+const SHEET_STEP = SHEET_SIZE / SHEET_SEG;
+const SHEET_Z_SEED = 1800; // plane is centred at z+1800 so it spans -1800..5400
+
+export function meshHeightAt(path: RailPath, x: number, z: number): number {
+  const fx = (x + SHEET_SIZE / 2) / SHEET_STEP;
+  const fz = (z - (SHEET_Z_SEED - SHEET_SIZE / 2)) / SHEET_STEP;
+  const i = Math.floor(fx);
+  const j = Math.floor(fz);
+  const ax = fx - i;
+  const az = fz - j;
+  const H = (ii: number, jj: number) => heightAt(path, -SHEET_SIZE / 2 + ii * SHEET_STEP, SHEET_Z_SEED - SHEET_SIZE / 2 + jj * SHEET_STEP);
+  const h00 = H(i, j);
+  const h01 = H(i, j + 1);
+  const h10 = H(i + 1, j);
+  const h11 = H(i + 1, j + 1);
+  // PlaneGeometry splits each quad along the (i,j+1)-(i+1,j) diagonal
+  return ax + az <= 1
+    ? h00 * (1 - ax - az) + h01 * az + h10 * ax
+    : h01 * (1 - ax) + h10 * (1 - az) + h11 * (ax + az - 1);
+}
+
 // Painted farmland patchwork: crisp rotated plots with crop-row strokes and
 // tan farm paths, like hand-painted anime field backgrounds. Soft hue blobs
 // stay small in count unlike alleong noise so nothing reads as a stain.
@@ -83,14 +110,14 @@ function fieldTexture(repeat: number): THREE.Texture {
   const c = document.createElement("canvas");
   c.width = c.height = size;
   const ctx = c.getContext("2d")!;
-  ctx.fillStyle = "#79b356";
+  ctx.fillStyle = "#69b44a";
   ctx.fillRect(0, 0, size, size);
   let seed = 1234;
   const rand = () => {
     seed = (seed * 1103515245 + 12345) & 0x7fffffff;
     return seed / 0x7fffffff;
   };
-  const tones = ["#6a9a4e", "#8bb96a", "#5f8f4a", "#98c375", "#61924c"];
+  const tones = ["#57a03b", "#7fc253", "#4c9a3a", "#90cc66", "#569f44"];
   const drawBlob = (x: number, y: number, r: number, color: string, alpha: number, edge = 1) => {
     // paint at up to 9 wrapped offsets so the texture tiles seamlessly
     for (const dx of [-size, 0, size]) {
@@ -271,19 +298,17 @@ function detailTexture(): THREE.Texture {
 }
 
 export function buildTerrain(scene: THREE.Scene, path: RailPath) {
-  const size = 7200;
-  const seg = 220;
-  const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+  const geo = new THREE.PlaneGeometry(SHEET_SIZE, SHEET_SIZE, SHEET_SEG, SHEET_SEG);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
-    const z = pos.getZ(i) + 1800;
+    const z = pos.getZ(i) + SHEET_Z_SEED;
     pos.setY(i, heightAt(path, x, z));
   }
   geo.computeVertexNormals();
 
-  const mat = new THREE.MeshToonMaterial({ map: fieldTexture(size / 260) });
+  const mat = new THREE.MeshToonMaterial({ map: fieldTexture(SHEET_SIZE / 260) });
   // vMapUv spans (size/260) field tiles across the plane, so a detail tile of
   // X metres repeats 260/X times per field tile — two desynced scales plus
   // the field texture break up any visible repetition
@@ -314,7 +339,7 @@ export function buildTerrain(scene: THREE.Scene, path: RailPath) {
   mat.customProgramCacheKey = () => "terrainDetail";
   const mesh = new THREE.Mesh(geo, mat);
   mesh.name = "terrain";
-  mesh.position.z = 1800;
+  mesh.position.z = SHEET_Z_SEED;
   scene.add(mesh);
 
   const water = new THREE.Mesh(
